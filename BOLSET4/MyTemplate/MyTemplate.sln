@@ -1,0 +1,3048 @@
+﻿using iQDataProvider;
+using iQPUBLIC;
+using System;
+using System.Collections.Generic;
+using System.Windows.Forms;
+using System.Text.RegularExpressions;
+using System.Data;
+using System.Windows;
+using System.Linq;
+using System.Data.Odbc;
+using System.Collections;
+using System.Configuration;
+
+namespace BOLSET4IQ
+{
+    public class clsF3
+    {
+
+        System.Data.OleDb.OleDbConnection MyConnection;
+        System.Data.DataSet DtSet;
+        System.Data.OleDb.OleDbDataAdapter MyCommand;
+        //string path = Application.StartupPath + "\\FRP001 PRO 29012021.xlsx";
+        //string As400_ConnectionString = "Driver={iSeries Access ODBC Driver};System=SAIATEST;UID=BOTBOLOCR;PWD=saia789$;Naming=1;DBQ=*USRLIBL;Compression=1;";
+        string As400_ConnectionString = "";
+        string Synonyms = "Description~PC~PKG~NMFC Item~Gross Weight~PACKAGES~Type~NMFC number~WGT~Freight ID Description~PACKAGE TYPE~Quantity~Weight~WElGHT~Cl~Item Description~Commodity Description~Class~NMFC~Qty~Pieces~Units~Qty~CTNS~Pieces/Quantity~Package~WT~Pkgs";
+
+
+        public RetStructF3 F3(clsCncMetaData ObjMetaData, int intCurrPageNumber, string strRoutineNo, string strArg)
+        {
+
+            RetStructF3 objRetStructF3 = new RetStructF3();
+            objRetStructF3.Status = "F";
+            objRetStructF3.NoOfieldsSuspects = 0;
+
+            //objBOLF3 = new BOL_SET4.clsF3();
+            //DataTable dt = GetEDIData();
+
+
+            switch (strRoutineNo)
+            {
+                case "CKM256":
+
+                    //strArg = "Quantity~Weight~Cl~Item Description~Commodity Description~Class~NMFC~Qty~Pieces~Units~Qty~CTNS~Pieces/Quantity~Package~WT~Pkgs~Net Weight~Gross Weight";
+                    objRetStructF3 = F3_AutoLocate_LineItem(ObjMetaData, intCurrPageNumber, strArg);
+
+                    break;
+
+
+                case "CKM257":
+
+                    objRetStructF3 = F3_LineData(ObjMetaData, intCurrPageNumber, strArg);
+
+                    break;
+            }
+
+            return objRetStructF3;
+
+        }
+
+        private DataTable GetEDIData()
+        {
+            DataTable dtGetData = null;
+            try
+            {
+                char[] seperator = { '\\' };
+
+
+                string[] file = PublicComponents.PROPath.Split(seperator);
+
+
+                string[] arrFilename = file[file.Count() - 1].Replace(".PRO", "").Split('_');
+
+                string str_ProNumber;
+
+                if (arrFilename.Count() == 0)
+                    str_ProNumber = arrFilename[0];
+                else
+                    str_ProNumber = arrFilename[1];
+
+                string queryString = "SELECT * from FRP001ED where FHPRO in (SELECT PCEPRO FROM DSP092 where PCPRO in ('" + str_ProNumber + "'))";
+
+                dtGetData = GetDataTableByText(As400_ConnectionString, queryString);
+            }
+            catch (Exception)
+            {
+                return dtGetData;
+            }
+            return dtGetData;
+        }
+
+        private RetStructF3 F3_LineData(clsCncMetaData ObjMetaData, int intCurrPageNumber, string strArg)
+        {
+
+            RetStructF3 objRetStructF3 = new RetStructF3();
+            objRetStructF3.Status = "F";
+            objRetStructF3.NoOfieldsSuspects = 0;
+
+            DataTable dtHeader = null, dtDetail = null, dtMapTable = null, dtDetailFinal = null;
+            string strNMFC = string.Empty, strSub = string.Empty, strClassCode = string.Empty;
+
+            List<packagecode> PkgCodes;
+
+            DataRow[] drdata = null;
+            DataRow[] drdata1 = null;
+            DataRow[] drdata3 = null;
+            DataRow[] drdata4 = null;
+            DataRow[] drdata8 = null;
+            DataRow[] drdata9 = null;
+
+            clsCnCWord ObjDescription;
+            clsCnCWord ObjNMFC;
+            clsCnCWord ObjClassCode;
+            clsCnCWord ObjWeight;
+            clsCnCWord ObjQuantity;
+            clsCnCWord ObjHazmatCode;
+            clsCnCWord ObjPalletCode;
+            clsCnCWord ObjWord;
+            DataRow drmap = null;
+
+            string[] arrNMFC;
+            string Pkgcode, code;
+            int PreviousLineno = 0;
+
+            int hx1, hy1, hx2, hy2;
+            int x1, y1, x2, y2;
+
+            Rect myRectangle2, myRectangle1;
+
+            char[] seperator = { '\\' };
+
+            string[] batchname = PublicComponents.InputBatchPath.Split(seperator);
+
+            string[] file = PublicComponents.PROPath.Split(seperator);
+
+
+            string[] seperator1 = { "PRO" };
+            //string connStr = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" + path + ";Extended Properties=Excel 12.0;";
+
+            string[] arrFilename = file[file.Count() - 1].Replace(".PRO", "").Split('_');
+
+            string PROFilename;
+            clsCnCWord word;
+
+            try
+            {
+                dtHeader = GetHeaderLine(ObjMetaData, intCurrPageNumber, strArg);
+                dtDetail = GetDataLineDeail(ObjMetaData, intCurrPageNumber, strArg);
+
+                dtMapTable = new DataTable();
+                int i = 0;
+                if (dtHeader != null && dtDetail != null)
+                {
+                    if (dtHeader.Rows.Count > 0 && dtDetail.Rows.Count > 0)
+                    {
+                        foreach (DataRow dr in dtHeader.Rows)
+                        {
+                            if (dtMapTable.Columns.Contains(dr["word"].ToString()))
+                            {
+                                dtMapTable.Columns.Add(dr["word"].ToString() + i, typeof(clsCnCWord));
+                                dr["word"] = dr["word"].ToString() + i;
+                                dtHeader.AcceptChanges();
+                                i++;
+                            }
+                            else
+                                dtMapTable.Columns.Add(dr["word"].ToString(), typeof(clsCnCWord));
+                        }
+
+
+                        drmap = null;
+                        PreviousLineno = 0;
+
+
+                        foreach (DataRow item in dtDetail.Rows)
+                        {
+
+                            int Lineno = Convert.ToInt32(item["Line No"]);
+
+                            if (PreviousLineno == 0 || (Lineno != PreviousLineno))
+                            {
+                                if (drmap != null && PreviousLineno != 0)
+                                    dtMapTable.Rows.Add(drmap);
+                                drmap = dtMapTable.NewRow();
+                            }
+
+
+
+                            x1 = Convert.ToInt32(item["left"]);
+                            y1 = 0;
+                            x2 = Convert.ToInt32(item["right"]);
+                            y2 = 1;
+                            myRectangle2 = new Rect(x1, y1, x2 - x1, y2);
+                            foreach (DataRow dr in dtHeader.Rows)
+                            {
+
+
+                                hx1 = Convert.ToInt32(dr["left"]);
+                                hy1 = 0;
+                                hx2 = Convert.ToInt32(dr["right"]);
+                                hy2 = 1;
+
+                                if (hx1 == x1 && hx2 == x2)
+                                    continue;
+                                if (Convert.ToInt32(dr["Line No"]) > Convert.ToInt32(item["Line No"]))
+                                    continue;
+
+                                myRectangle1 = new Rect(hx1, hy1, hx2 - hx1, hy2);
+                                bool doesIntersect = myRectangle1.IntersectsWith(myRectangle2);
+
+                                if (doesIntersect)
+                                {
+                                    //drmap[dr["word"].ToString()] = drmap[dr["word"].ToString()].ToString() + " " + item["Wword"];
+                                    if (!Convert.IsDBNull(item["ObjWord"]))
+                                    {
+                                        ObjWord = (clsCnCWord)item["ObjWord"];
+
+                                        if (ObjWord.Confidence > 85 && !(ObjWord.ConfString.Contains("5") || ObjWord.ConfString.Contains("4") || ObjWord.ConfString.Contains("6") ||
+                                            ObjWord.ConfString.Contains("7") || (ObjWord.ConfString.Contains("3") || ObjWord.ConfString.Contains("2") || ObjWord.ConfString.Contains("1"))))
+                                            ObjWord.Flag = "1";
+                                        else
+                                            ObjWord.Flag = "0";
+
+                                        ObjWord.Remarks = "3F";
+                                        item["ObjWord"] = ObjWord;
+                                        ObjWord = null;
+                                    }
+
+                                    drmap[dr["word"].ToString()] = item["ObjWord"];
+                                    break;
+                                }
+                            }
+
+
+                            PreviousLineno = Convert.ToInt32(item["Line No"]);
+                        }
+
+                        if (drmap != null)
+                            dtMapTable.Rows.Add(drmap);
+                    }
+                }
+
+                dtDetailFinal = MakedtDetailFinal();
+                DataRow drdetail;
+
+
+                PkgCodes = Module1.GetPackageCode();
+                Pkgcode = string.Empty;
+
+                for (int k = 0; k < dtMapTable.Rows.Count; k++)
+                {
+                    drdetail = dtDetailFinal.NewRow();
+
+                    drdetail["Line Number"] = k + 1;
+                    drdetail["IsValid"] = 0;
+                    ObjDescription = new clsCnCWord();
+                    ObjNMFC = new clsCnCWord();
+                    ObjClassCode = new clsCnCWord();
+                    ObjWeight = new clsCnCWord();
+                    ObjQuantity = new clsCnCWord();
+                    ObjHazmatCode = new clsCnCWord();
+                    ObjPalletCode = new clsCnCWord();
+
+                    for (int j = 0; j < dtMapTable.Columns.Count; j++)
+                    {
+                        if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("DESCRIPTION"))
+                        {
+                            if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                            {
+
+                                ObjDescription = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+                                drdetail["Description"] = ObjDescription.strWord;
+                                drdetail["WDescription"] = ObjDescription;
+                            }
+                        }
+                        if(!dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("TYPE0"))
+                        {
+                            if(dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("TYPE"))
+                            {
+                                if (string.IsNullOrEmpty(Convert.ToString(drdetail["Pallate Code"])))
+                                {
+                                    if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                    {
+                                        ObjPalletCode = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+
+
+                                        Pkgcode = ObjPalletCode.strWord.Replace("(s)", "").Replace("(", "").Replace(")", "");
+
+                                        if (!string.IsNullOrEmpty(Pkgcode))
+                                        {
+                                            foreach (packagecode gg in PkgCodes)
+                                            {
+
+                                                if (Convert.ToString(gg.Value).Contains(Pkgcode.ToUpper()) || Pkgcode.ToUpper().Contains(Convert.ToString(gg.Value)))
+                                                {
+                                                    ObjPalletCode.strWord = gg.Key.ToString();
+                                                    ObjPalletCode.Flag = "1";
+
+                                                    drdetail["Pallate Code"] = ObjPalletCode.strWord;
+                                                    drdetail["WPallate Code"] = ObjPalletCode;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("TYPE0"))
+                        {
+
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Pallate Code"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    ObjPalletCode = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+
+
+                                    Pkgcode = ObjPalletCode.strWord.Replace("(s)", "").Replace("(", "").Replace(")", "");
+
+                                    if (!string.IsNullOrEmpty(Pkgcode))
+                                    {
+                                        foreach (packagecode gg in PkgCodes)
+                                        {
+
+                                            if (Convert.ToString(gg.Value).Contains(Pkgcode.ToUpper()) || Pkgcode.ToUpper().Contains(Convert.ToString(gg.Value)))
+                                            {
+                                                ObjPalletCode.strWord = gg.Key.ToString();
+                                                ObjPalletCode.Flag = "1";
+
+                                                drdetail["Pallate Code"] = ObjPalletCode.strWord;
+                                                drdetail["WPallate Code"] = ObjPalletCode;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                        }
+                        if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("PACKAGE TYPE"))
+                        {
+
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Pallate Code"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    ObjPalletCode = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+
+
+                                    Pkgcode = ObjPalletCode.strWord.Replace("(s)", "").Replace("(", "").Replace(")", "");
+
+                                    if (!string.IsNullOrEmpty(Pkgcode))
+                                    {
+                                        foreach (packagecode gg in PkgCodes)
+                                        {
+
+                                            if (Convert.ToString(gg.Value).Contains(Pkgcode.ToUpper()) || Pkgcode.ToUpper().Contains(Convert.ToString(gg.Value)))
+                                            {
+                                                ObjPalletCode.strWord = gg.Key.ToString();
+                                                ObjPalletCode.Flag = "1";
+
+                                                drdetail["Pallate Code"] = ObjPalletCode.strWord;
+                                                drdetail["WPallate Code"] = ObjPalletCode;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        //else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("NMFC"))
+                        //{
+                        //    if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                        //    {
+                        //        ObjNMFC = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+                        //        drdetail["NMFC"] = ObjNMFC.strWord;
+                        //        drdetail["WNMFC"] = ObjNMFC;
+                        //    }
+                        //}
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("CLASS"))
+                        {
+                            if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                            {
+                                ObjClassCode = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+                                drdetail["Class Code"] = ObjClassCode.strWord;
+                                drdetail["WClass Code"] = ObjClassCode;
+                            }
+                        }
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("WEIGHT"))
+                        {
+                            if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                            {
+                                ObjWeight = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+                                ObjWeight.strWord = ObjWeight.strWord.ToLower().Replace("1bs", "");
+                                double result;
+
+                                if (double.TryParse(ObjWeight.strWord.ToLower().Replace("lbs", "").Replace("lb", ""), out  result))
+                                {
+
+                                    double weight = Math.Round(Convert.ToDouble(ObjWeight.strWord.ToLower().Replace("lbs", "").Replace("lb", "")));
+                                    ObjWeight.strWord = Convert.ToString(weight);
+
+
+                                    drdetail["Weight"] = ObjWeight.strWord;
+                                    drdetail["WWeight"] = ObjWeight;
+                                }
+                            }
+                        }
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("WGT"))
+                        {
+                            if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                            {
+                                ObjWeight = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+                                //ObjWeight.strWord = ObjWeight.strWord.ToLower().Replace("lbs", "");
+                                //ObjWeight.strWord = ObjWeight.strWord.ToLower().Replace("lb", "");
+                                ObjWeight.strWord = ObjWeight.strWord.ToLower().Replace("1bs", "");
+                                double result;
+
+                                if (double.TryParse(ObjWeight.strWord.ToLower().Replace("lbs", "").Replace("lb", ""), out  result))
+                                {
+
+                                    double weight = Math.Round(Convert.ToDouble(ObjWeight.strWord.ToLower().Replace("lbs", "").Replace("lb", "")));
+                                    ObjWeight.strWord = Convert.ToString(weight);
+
+
+                                    drdetail["Weight"] = ObjWeight.strWord;
+                                    drdetail["WWeight"] = ObjWeight;
+                                }
+                            }
+
+                        }
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("PCS"))
+                        {
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Quantity"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    double result;
+                                    ObjQuantity = (clsCnCWord)(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]);
+
+                                    if (double.TryParse(ObjQuantity.strWord, out  result))
+                                    {
+                                        drdetail["Quantity"] = ObjQuantity.strWord;
+                                        drdetail["WQuantity"] = ObjQuantity;
+                                    }
+                                }
+                            }
+
+                        }
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("PKGS"))
+                        {
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Quantity"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    double result;
+                                    ObjQuantity = (clsCnCWord)(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]);
+
+                                    if (double.TryParse(ObjQuantity.strWord, out  result))
+                                    {
+                                        drdetail["Quantity"] = ObjQuantity.strWord;
+                                        drdetail["WQuantity"] = ObjQuantity;
+                                    }
+                                }
+                            }
+
+                        }
+                        //else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("PACKAGES"))
+                        //{
+                        //    if (string.IsNullOrEmpty(Convert.ToString(drdetail["Quantity"])))
+                        //    {
+                        //        if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                        //        {
+                        //            ObjQuantity = (clsCnCWord)(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]);
+                        //            drdetail["Quantity"] = ObjQuantity.strWord;
+                        //            drdetail["WQuantity"] = ObjQuantity;
+                        //        }
+                        //    }
+
+                        //}
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("QUANTITY"))
+                        {
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Quantity"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    double result;
+
+                                    ObjQuantity = (clsCnCWord)(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]);
+
+                                    if (double.TryParse(ObjQuantity.strWord, out  result))
+                                    {
+                                        drdetail["Quantity"] = ObjQuantity.strWord;
+                                        drdetail["WQuantity"] = ObjQuantity;
+                                    }
+                                }
+                            }
+
+                        }
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("QTY0"))
+                        {
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Quantity"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    double result;
+                                    ObjQuantity = (clsCnCWord)(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]);
+                                    if (double.TryParse(ObjQuantity.strWord, out  result))
+                                    {
+
+                                        drdetail["Quantity"] = ObjQuantity.strWord;
+                                        drdetail["WQuantity"] = ObjQuantity;
+                                    }
+                                }
+                            }
+                        }
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("UNITS"))
+                        {
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Quantity"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    double result;
+                                    ObjQuantity = (clsCnCWord)(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]);
+                                    if (double.TryParse(ObjQuantity.strWord, out  result))
+                                    {
+
+                                        drdetail["Quantity"] = ObjQuantity.strWord;
+                                        drdetail["WQuantity"] = ObjQuantity;
+                                    }
+                                }
+                            }
+
+                        }
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("CTNS"))
+                        {
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Quantity"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    double result;
+                                    ObjQuantity = (clsCnCWord)(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]);
+                                    if (double.TryParse(ObjQuantity.strWord, out  result))
+                                    {
+
+                                        drdetail["Quantity"] = ObjQuantity.strWord;
+                                        drdetail["WQuantity"] = ObjQuantity;
+                                    }
+                                }
+                            }
+                        }
+                        else if (dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`").Contains("PIECES"))
+                        {
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Quantity"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    Double result;
+                                    ObjQuantity = (clsCnCWord)(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]);
+                                    if (double.TryParse(ObjQuantity.strWord, out  result))
+                                    {
+
+                                        drdetail["Quantity"] = ObjQuantity.strWord;
+                                        drdetail["WQuantity"] = ObjQuantity;
+                                    }
+                                }
+                            }
+
+                        }
+                        else if (CheckValidWord(dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`"), new string[] { "DESCRIPTION", "COMMODITY DESCRIPTION", "ITEM DESCRIPTION" }))
+                        {
+                            if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                            {
+                                ObjDescription = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+                                drdetail["Description"] = ObjDescription.strWord;
+                                drdetail["WDescription"] = ObjDescription;
+                            }
+                        }
+                        else if (CheckValidWord(dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`"), new string[] { "NMFC", "NMFC Number" }))
+                        {
+
+                            if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                            {
+                                ObjNMFC = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+                                if (!string.IsNullOrEmpty(ObjNMFC.strWord))
+                                {
+                                    drdetail["NMFC"] = ObjNMFC.strWord;
+                                    drdetail["WNMFC"] = ObjNMFC;
+                                }
+                            }
+
+                        }
+                        else if (CheckValidWord(dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`"), new string[] { "CLASS", "CL" }))
+                        {
+                            if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                            {
+                                ObjClassCode = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+                                drdetail["Class Code"] = ObjClassCode.strWord;
+                                drdetail["WClass Code"] = ObjClassCode;
+                            }
+                        }
+                        else if (CheckValidWord(dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`"), new string[] { "WGT", "WElGHT", "WEIGHT", "GROSS WEIGHT", "NET WEIGHT", "WT", "ACT WT" }))
+                        {
+                            if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                            {
+                                ObjWeight = (clsCnCWord)dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName];
+                                ObjWeight.strWord = ObjWeight.strWord.ToLower().Replace("1bs", "");
+
+                                double result;
+
+                                if (double.TryParse(ObjWeight.strWord.ToLower().Replace("lbs", "").Replace("lb", ""), out  result))
+                                {
+                                    double weight = Math.Round(Convert.ToDouble(ObjWeight.strWord.ToLower().Replace("lbs", "").Replace("lb", "")));
+                                    ObjWeight.strWord = Convert.ToString(weight);
+
+                                    drdetail["Weight"] = ObjWeight.strWord;
+                                    drdetail["WWeight"] = ObjWeight;
+                                }
+                            }
+                        }
+                        else if (CheckValidWord(dtMapTable.Columns[j].ColumnName.ToUpper().Trim().Replace("'", "`"), new string[] { "PC", "PCS", "PKGS", "PACKAGES", "UNITS", "QUANTITY", "QTY1", "CTNS", "PIECES" }))
+                        {
+                            if (string.IsNullOrEmpty(Convert.ToString(drdetail["Quantity"])))
+                            {
+                                if (!Convert.IsDBNull(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]))
+                                {
+                                    double result;
+                                    ObjQuantity = (clsCnCWord)(dtMapTable.Rows[k][dtMapTable.Columns[j].ColumnName]);
+                                    if (double.TryParse(ObjQuantity.strWord, out  result))
+                                    {
+
+                                        drdetail["Quantity"] = ObjQuantity.strWord;
+                                        drdetail["WQuantity"] = ObjQuantity;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    dtDetailFinal.Rows.Add(drdetail);
+
+
+                    ObjDescription = null;
+                    ObjNMFC = null;
+                    ObjClassCode = null;
+                    ObjWeight = null;
+                    ObjQuantity = null;
+                    ObjHazmatCode = null;
+                    ObjPalletCode = null;
+
+                }
+
+
+                if (arrFilename.Count() == 1)
+                {
+                    PROFilename = arrFilename[0];
+                }
+                else
+                    PROFilename = arrFilename[arrFilename.Count() - 1];
+
+
+                code = string.Empty;
+
+
+                if (PublicComponents.htMyVariable.ContainsKey("BOLSET4_ShpCode"))
+                {
+                    code = Convert.ToString(PublicComponents.htMyVariable["BOLSET4_ShpCode"]);
+                }
+                else
+                {
+                    //MyConnection = new System.Data.OleDb.OleDbConnection(connStr);
+                    //MyCommand = new System.Data.OleDb.OleDbDataAdapter("select * from [Sheet1$] where [FHPRO]=" + PROFilename + "", MyConnection);
+
+
+                    //DtSet = new System.Data.DataSet();
+                    //MyCommand.Fill(DtSet);
+                    //MyConnection.Close();
+
+                    //MyCommand.Dispose();
+                    //MyConnection.Dispose();
+
+
+                    //if (DtSet != null)
+                    //{
+                    //    if (DtSet.Tables.Count > 0)
+                    //    {
+                    //        if (DtSet.Tables[0].Rows.Count > 0)
+                    //            code = Convert.ToString(DtSet.Tables[0].Rows[0][1]);
+                    //        //else
+                    //        //    return objRetStructF3  ;
+                    //    }
+                    //    //if (code.StartsWith("99"))
+                    //    //    return objRetStructF3;
+                    //}
+                }
+                DataTable dtGetData = null;
+                if (code.StartsWith("99") || string.IsNullOrEmpty(code) || code.StartsWith("**"))
+                {
+
+                }
+                else
+                {
+                    //return;
+
+
+                    string shipcode = string.Empty;
+                    shipcode = code.PadLeft(7, '0');
+                    //if (code.Trim().Length < 7)
+                    //{
+
+                    //    for (int k = 1; k <= 7 - code.Trim().Length; k++)
+                    //        shipcode = "0" + shipcode;
+                    //}
+
+                    //shipcode = "0107778";
+
+                    //string Query_String = "SELECT F30.SASBLC, F31.SBDES,F31.SBNMFC,F31.SBSUB,F31.SBCMCL FROM FRP030 F30 Inner join FRP031 F31 on F30.SASBLC = F31.SBSBLC where F30.SASCD ='" + batchname[batchname.Count() - 1] + "'";
+                    string Query_String = "SELECT F30.SASBLC, F31.SBDES,F31.SBNMFC,F31.SBSUB,F31.SBCMCL FROM FRP030 F30 Inner join FRP031 F31 on F30.SASBLC = F31.SBSBLC where F30.SASCD ='" + shipcode + "'";
+
+
+                    //string queryString = Query_String;
+
+                    dtGetData = GetDataTableByText(As400_ConnectionString, Query_String);
+
+                    if (dtGetData.Rows.Count == 0)
+                        goto done;
+
+                    int LineNo = 0;
+
+                    foreach (DataRow dr in dtDetailFinal.Rows)
+                    {
+                        if (Convert.ToString(dr["NMFC"]).Contains("-"))
+                            arrNMFC = Convert.ToString(dr["NMFC"]).Split('-');
+                        else if (Convert.ToString(dr["NMFC"]).Contains("."))
+                            arrNMFC = Convert.ToString(dr["NMFC"]).Split('.');
+                        else
+                            arrNMFC = Convert.ToString(dr["NMFC"]).Split('-');
+
+                        strNMFC = string.Empty; strSub = string.Empty; strClassCode = string.Empty;
+
+                        if (arrNMFC.Count() > 1)
+                        {
+                            strNMFC = arrNMFC[0].Trim().Replace("l", "");
+
+                            if (arrNMFC[1] == "00" || arrNMFC[1] == "0")
+                            {
+                                strSub = "0";
+                            }
+                            else
+                                strSub = arrNMFC[1].Replace('0', ' ').Trim();
+                        }
+                        else
+                        {
+                            strNMFC = Convert.ToString(dr["NMFC"]).Replace("l", "");
+                            strSub = "0";
+                        }
+
+
+
+                        ObjDescription = new clsCnCWord();
+                        drdata = null;
+                        drdata1 = null;
+                        drdata3 = null;
+                        drdata4 = null;
+                        drdata8 = null;
+                        drdata9 = null;
+
+                        strClassCode = Convert.ToString(dr["Class Code"]).Trim();
+
+
+
+                        if (!Convert.IsDBNull(dr["WNMFC"]))
+                        {
+                            word = (clsCnCWord)dr["WNMFC"];
+                            LineNo = word.LineNo;
+                            ObjNMFC = (clsCnCWord)dr["WNMFC"];
+                        }
+                        else
+                        {
+                            ObjNMFC = null;
+                        }
+
+                        if (!Convert.IsDBNull(dr["WQuantity"]))
+                        {
+
+                            word = (clsCnCWord)dr["WQuantity"];
+                            LineNo = word.LineNo;
+                            ObjQuantity = (clsCnCWord)dr["WQuantity"];
+                        }
+                        else
+                        {
+                            ObjQuantity = null;
+                        }
+
+                        if (!Convert.IsDBNull(dr["WClass Code"]))
+                        {
+                            word = (clsCnCWord)dr["WClass Code"];
+                            LineNo = word.LineNo;
+                            ObjClassCode = (clsCnCWord)dr["WClass Code"];
+                        }
+                        else
+                        {
+                            ObjClassCode = null;
+                        }
+
+                        if (!Convert.IsDBNull(dr["WDescription"]))
+                        {
+                            word = (clsCnCWord)dr["WDescription"];
+                            LineNo = word.LineNo;
+                            ObjDescription = (clsCnCWord)dr["WDescription"];
+                        }
+
+                        if (!Convert.IsDBNull(dr["WWeight"]))
+                        {
+                            word = (clsCnCWord)dr["WWeight"];
+                            LineNo = word.LineNo;
+                            ObjWeight = (clsCnCWord)dr["WWeight"];
+                        }
+                        else
+                        {
+                            ObjWeight = null;
+                        }
+
+                        if (LineNo > 0 && (strSub == "0" || string.IsNullOrEmpty(strSub) && !string.IsNullOrEmpty(strNMFC)))
+                        {
+                            clsCnCLine line = PublicComponents.oMetaData1.Page[intCurrPageNumber].Line[LineNo];
+
+                            if (line.strLine.ToUpper().Contains("SUB"))
+                            {
+                                clsCnCWord[] words = line.Word;
+
+                                for (int m = 0; m < words.Count(); m++)
+                                {
+                                    if (words[m] != null)
+                                    {
+                                        if (words[m].strWord.Contains("SUB"))
+                                        {
+                                            if (words[m + 1].strWord.Length == 1)
+                                                strSub = words[m + 1].strWord;
+                                            else
+                                                strSub = words[m].strWord.Substring(words[m].strWord.IndexOf("SUB") + 3, 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if ((strNMFC.Length >= 10 || (string.IsNullOrEmpty(strNMFC)) && LineNo > 0))
+                        {
+                            foreach (DataRow item in dtGetData.Rows)
+                            {
+                                clsCnCLine line = PublicComponents.oMetaData1.Page[intCurrPageNumber].Line[LineNo];
+
+                                if (line.strLine.Contains(Convert.ToString(item["SBNMFC"]).Trim()))
+                                {
+                                    foreach (clsCnCWord wnmfc in line.Word)
+                                    {
+                                        if (wnmfc != null)
+                                        {
+                                            if (wnmfc.strWord.Contains(Convert.ToString(item["SBNMFC"]).Trim()) && wnmfc.strWord.Length >= 5 && !wnmfc.strWord.Contains(".") && Convert.ToString(item["SBNMFC"]).Trim() != "0")
+                                            {
+                                                //wnmfc.strWord = Convert.ToString(item["SBNMFC"]);
+                                                dr["WNMFC"] = wnmfc;
+                                                dr["NMFC"] = Convert.ToString(item["SBNMFC"]);
+                                                dtDetailFinal.AcceptChanges();
+
+                                                if (wnmfc.strWord.Contains('-'))
+                                                    arrNMFC = wnmfc.strWord.Split('-');
+                                                else if (wnmfc.strWord.Contains('.'))
+                                                    arrNMFC = wnmfc.strWord.Split('.');
+                                                else
+                                                    arrNMFC = wnmfc.strWord.Split('-');
+
+                                                if (arrNMFC.Count() > 1)
+                                                {
+                                                    strNMFC = arrNMFC[0].Trim().Replace("l", "");
+
+                                                    if (arrNMFC[1] == "00" || arrNMFC[1] == "0")
+                                                    {
+                                                        strSub = "0";
+                                                    }
+                                                    else
+                                                        strSub = arrNMFC[1].Replace('0', ' ').Trim();
+                                                }
+                                                else
+                                                {
+                                                    strNMFC = Convert.ToString(dr["NMFC"]).Replace("l", "");
+                                                    //strSub = "0";
+                                                }
+
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (line.strLine.Contains(Convert.ToString(item["SBCMCL"]).Trim()))
+                                {
+                                    foreach (clsCnCWord wnmfc in line.Word)
+                                    {
+                                        if (wnmfc != null)
+                                        {
+                                            if (wnmfc.strWord == Convert.ToString(item["SBCMCL"]).Trim())
+                                            {
+                                                dr["WClass Code"] = wnmfc;
+                                                dr["Class Code"] = wnmfc.strWord;
+                                                dtDetailFinal.AcceptChanges();
+                                                strClassCode = wnmfc.strWord;
+                                            }
+                                        }
+                                    }
+                                }
+
+
+                                if (string.IsNullOrEmpty(Convert.ToString(dr["Description"]).Trim()))
+                                {
+
+                                    foreach (clsCnCWord wDesc in line.Word)
+                                    {
+                                        if (wDesc != null)
+                                        {
+                                            clsCNCSBR ObjSbr = new clsCNCSBR();
+                                            RetStructIQSBR050 objRet50 = new RetStructIQSBR050();
+                                            objRet50 = ObjSbr.IQSBR050(Module1.func_RemoveSpecialCharacter(Convert.ToString(item["SBDES"])).Trim().ToUpper(), Module1.func_RemoveSpecialCharacter(wDesc.strWord.ToUpper()));
+                                            if (objRet50.PercentageMatch >= 90)
+                                            {
+                                                ObjDescription = (clsCnCWord)dr["WDescription"];
+                                                ObjDescription.strWord = Convert.ToString(drdata[0]["SBDES"]);
+                                                ObjDescription.Confidence = 100;
+                                                ObjDescription.Flag = "1";
+                                                ObjDescription.Remarks = "2F";
+
+
+
+                                                dr["WDescription"] = ObjDescription;
+                                            }
+
+                                        }
+                                    }
+                                }
+                            }
+
+
+                        }
+
+
+                        if (!strNMFC.All(x => char.IsDigit(x)))
+                            goto X;
+
+
+                        if (!string.IsNullOrEmpty(strNMFC) && !string.IsNullOrEmpty(strSub))
+                            drdata = dtGetData.Select("SBNMFC='" + strNMFC + "' and SBSUB='" + strSub + "' and SBCMCL='" + strClassCode + "'");
+
+                        if (!string.IsNullOrEmpty(strNMFC) && !string.IsNullOrEmpty(strSub))
+                            drdata1 = dtGetData.Select("SBNMFC='" + strNMFC + "' and SBSUB='" + strSub + "'");
+
+                        if (!string.IsNullOrEmpty(strNMFC) && !string.IsNullOrEmpty(strClassCode) && !string.IsNullOrEmpty(strSub))
+                            drdata3 = dtGetData.Select("SBNMFC='" + strNMFC + "' and SBSUB='0' and SBCMCL='" + strClassCode + "'");
+
+                        if (!string.IsNullOrEmpty(strNMFC))
+                            drdata4 = dtGetData.Select("SBNMFC='" + strNMFC + "'");
+
+                        if (string.IsNullOrEmpty(strNMFC))
+                            drdata8 = dtGetData.Select("SBNMFC<>'0'");
+
+                        if (string.IsNullOrEmpty(strNMFC))
+                            drdata9 = dtGetData.Select("SBNMFC = '0'");
+
+
+                        if (drdata != null)
+                        {
+                            if (drdata.Count() > 0)
+                            {
+                                dr["Description"] = drdata[0]["SBDES"];
+
+                                if (!Convert.IsDBNull(dr["WDescription"]))
+                                {
+                                    ObjDescription = (clsCnCWord)dr["WDescription"];
+                                    ObjDescription.strWord = Convert.ToString(drdata[0]["SBDES"]);
+                                    ObjDescription.Confidence = 100;
+                                    ObjDescription.Flag = "1";
+                                    ObjDescription.Remarks = "2F";
+
+
+
+                                    dr["WDescription"] = ObjDescription;
+
+                                }
+                                else
+                                {
+                                    ObjDescription = GetDefaultWord(1, Convert.ToString(drdata[0]["SBDES"]));
+
+                                    ObjDescription.Confidence = 100;
+                                    ObjDescription.Flag = "1";
+                                    ObjDescription.Remarks = "2F";
+
+                                    dr["WDescription"] = ObjDescription;
+                                }
+                                dr["IsValid"] = 1;
+
+                                if (!Convert.IsDBNull(dr["WClass Code"]))
+                                {
+                                    ObjClassCode = (clsCnCWord)dr["WClass Code"];
+                                    ObjClassCode.Confidence = 100;
+                                    ObjClassCode.Flag = "1";
+                                    ObjClassCode.Remarks = "3F";
+                                    dr["WClass Code"] = ObjClassCode;
+
+                                }
+
+                                if (!Convert.IsDBNull(dr["WNMFC"]))
+                                {
+                                    ObjNMFC = (clsCnCWord)dr["WNMFC"];
+                                    ObjNMFC.Confidence = 100;
+                                    ObjNMFC.Flag = "1";
+                                    ObjNMFC.Remarks = "3F";
+                                    dr["WNMFC"] = ObjNMFC;
+
+                                }
+                                dtDetailFinal.AcceptChanges();
+                                continue;
+                            }
+                            else
+                            {
+                                goto X;
+                            }
+                        }
+
+                    X:
+                        if (drdata1 != null)
+                        {
+                            if (drdata1.Count() > 0)
+                            {
+                                DataRow[] drdata2 = drdata1.CopyToDataTable().Select("SBCMCL<>'" + Convert.ToString(dr["Class Code"]).Trim() + "'");
+
+                                if (drdata2.Count() > 0)
+                                {
+                                    dr["IsValid"] = 1;
+                                    dr["Description"] = drdata2[0]["SBDES"];
+
+
+                                    if (!Convert.IsDBNull(dr["WDescription"]))
+                                    {
+                                        ObjDescription = (clsCnCWord)dr["WDescription"];
+                                        ObjDescription.strWord = Convert.ToString(drdata2[0]["SBDES"]);
+                                        ObjDescription.Flag = "1";
+                                        ObjDescription.Remarks = "2F";
+
+                                        ObjDescription.Confidence = 100;
+                                        dr["WDescription"] = ObjDescription;
+
+                                    }
+                                    else
+                                    {
+                                        ObjDescription = GetDefaultWord(1, Convert.ToString(drdata2[0]["SBDES"]));
+                                        ObjDescription.Confidence = 100;
+                                        ObjDescription.Flag = "1";
+                                        ObjDescription.Remarks = "2F";
+                                        dr["WDescription"] = ObjDescription;
+                                    }
+
+                                    if (!Convert.IsDBNull(dr["WNMFC"]))
+                                    {
+                                        ObjNMFC = (clsCnCWord)dr["WNMFC"];
+                                        ObjNMFC.Confidence = 100;
+                                        ObjNMFC.Flag = "1";
+                                        ObjNMFC.Remarks = "3F";
+                                        dr["WNMFC"] = ObjNMFC;
+
+                                    }
+
+                                    dtDetailFinal.AcceptChanges();
+                                    continue;
+                                }
+                                else
+                                {
+                                    dr["IsValid"] = 0;
+                                    dtDetailFinal.AcceptChanges();
+
+                                }
+                            }
+                            else
+                            {
+
+                                dr["IsValid"] = 0;
+                                dtDetailFinal.AcceptChanges();
+                            }
+                        }
+                        else
+                        {
+                            dr["IsValid"] = 0;
+                            dtDetailFinal.AcceptChanges();
+
+                        }
+
+                        if (drdata3 != null && strSub != "0")
+                        {
+                            if (drdata3.Count() > 0)
+                            {
+                                dr["IsValid"] = 1;
+                                dr["Description"] = drdata3[0]["SBDES"];
+
+                                if (!Convert.IsDBNull(dr["WDescription"]))
+                                {
+                                    ObjDescription = (clsCnCWord)dr["WDescription"];
+                                    ObjDescription.strWord = Convert.ToString(drdata3[0]["SBDES"]);
+                                    ObjDescription.Confidence = 100;
+                                    ObjDescription.Flag = "1";
+                                    ObjDescription.Remarks = "2F";
+                                    dr["WDescription"] = ObjDescription;
+
+
+
+                                }
+                                else
+                                {
+                                    ObjDescription = GetDefaultWord(1, Convert.ToString(drdata3[0]["SBDES"]));
+                                    ObjDescription.Confidence = 100;
+                                    ObjDescription.Flag = "1";
+                                    ObjDescription.Flag = "2F";
+                                    dr["WDescription"] = ObjDescription;
+                                }
+                                if (!Convert.IsDBNull(dr["WClass Code"]))
+                                {
+                                    ObjClassCode = (clsCnCWord)dr["WClass Code"];
+                                    ObjClassCode.Confidence = 100;
+                                    ObjClassCode.Flag = "1";
+                                    ObjClassCode.Remarks = "3F";
+                                    dr["WClass Code"] = ObjClassCode;
+
+                                }
+
+                                if (!Convert.IsDBNull(dr["WNMFC"]))
+                                {
+                                    ObjNMFC = (clsCnCWord)dr["WNMFC"];
+                                    ObjNMFC.Confidence = 100;
+                                    ObjNMFC.Flag = "1";
+                                    ObjNMFC.Remarks = "3F";
+                                    dr["WNMFC"] = ObjNMFC;
+
+                                }
+
+                                dtDetailFinal.AcceptChanges();
+                                continue;
+                            }
+                            else
+                            {
+                                dr["IsValid"] = 0;
+                                dtDetailFinal.AcceptChanges();
+                            }
+                        }
+                        else
+                        {
+                            dr["IsValid"] = 0;
+                            dtDetailFinal.AcceptChanges();
+                        }
+
+                        if (drdata4 == null && strNMFC != "0")
+                        {
+                            DataRow[] drdata5 = dtGetData.Select("SBCMCL='" + Convert.ToString(dr["Class Code"]).Trim() + "'");
+                            string Description = Convert.ToString(dr["Description"]);
+
+                            if (drdata5 != null && !string.IsNullOrEmpty(Description))
+                            {
+
+                                if (drdata5.Count() > 0)
+                                {
+                                    if (CheckValidWord(Convert.ToString(drdata5[0]["SBDES"]).ToUpper(), new string[] { Description.ToUpper() }))
+                                    {
+
+                                        dr["IsValid"] = 1;
+                                        dr["Description"] = drdata5[0]["SBDES"];
+
+
+                                        if (!Convert.IsDBNull(dr["WDescription"]))
+                                        {
+                                            ObjDescription = (clsCnCWord)dr["WDescription"];
+                                            ObjDescription.strWord = Convert.ToString(drdata5[0]["SBDES"]);
+                                            ObjDescription.Confidence = 100;
+                                            ObjDescription.Flag = "1";
+                                            ObjDescription.Remarks = "2F";
+                                            dr["WDescription"] = ObjDescription;
+
+                                        }
+                                        else
+                                        {
+                                            ObjDescription = GetDefaultWord(1, Convert.ToString(drdata5[0]["SBDES"]));
+                                            ObjDescription.Confidence = 100;
+                                            ObjDescription.Flag = "1";
+                                            ObjDescription.Remarks = "2F";
+                                            dr["WDescription"] = ObjDescription;
+                                        }
+
+                                        if (!Convert.IsDBNull(dr["WClass Code"]))
+                                        {
+                                            ObjClassCode = (clsCnCWord)dr["WClass Code"];
+                                            ObjClassCode.Confidence = 100;
+                                            ObjClassCode.Flag = "1";
+                                            ObjClassCode.Remarks = "3F";
+                                            dr["WClass Code"] = ObjClassCode;
+
+                                        }
+
+
+                                        dtDetailFinal.AcceptChanges();
+                                        continue;
+                                    }
+                                }
+                                else
+                                {
+
+                                    dr["IsValid"] = 0;
+                                    dtDetailFinal.AcceptChanges();
+                                }
+                            }
+                            else
+                            {
+                                dr["IsValid"] = 0;
+                                dtDetailFinal.AcceptChanges();
+                            }
+                        }
+
+                        //The skeleton has an NMFC#, but the OBL does not 
+                        if (drdata8 != null && (string.IsNullOrEmpty(strNMFC) || strNMFC == "0"))
+                        {
+                            DataRow[] drdata5 = null;
+
+                            if (drdata8.Count() > 0)
+                                drdata5 = drdata8.CopyToDataTable().Select("SBCMCL='" + Convert.ToString(dr["Class Code"]).Trim() + "'");
+
+                            string Description = Convert.ToString(dr["Description"]);
+
+                            if (drdata5 != null && !string.IsNullOrEmpty(Description))
+                            {
+
+                                if (drdata5.Count() > 0)
+                                {
+                                    if (CheckValidWord(Convert.ToString(drdata5[0]["SBDES"]).ToUpper(), new string[] { Description.ToUpper() }))
+                                    {
+
+                                        dr["IsValid"] = 1;
+                                        dr["Description"] = drdata5[0]["SBDES"];
+
+
+                                        if (!Convert.IsDBNull(dr["WDescription"]))
+                                        {
+                                            ObjDescription = (clsCnCWord)dr["WDescription"];
+                                            ObjDescription.strWord = Convert.ToString(drdata5[0]["SBDES"]);
+                                            ObjDescription.Confidence = 100;
+                                            ObjDescription.Flag = "1";
+                                            ObjDescription.Remarks = "2F";
+                                            dr["WDescription"] = ObjDescription;
+
+                                        }
+                                        else
+                                        {
+                                            ObjDescription = GetDefaultWord(1, Convert.ToString(drdata5[0]["SBDES"]));
+                                            ObjDescription.Confidence = 100;
+                                            ObjDescription.Flag = "1";
+                                            ObjDescription.Remarks = "2F";
+                                            dr["WDescription"] = ObjDescription;
+                                        }
+
+                                        if (!Convert.IsDBNull(dr["WClass Code"]))
+                                        {
+                                            ObjClassCode = (clsCnCWord)dr["WClass Code"];
+                                            ObjClassCode.Confidence = 100;
+                                            ObjClassCode.Flag = "1";
+                                            ObjClassCode.Remarks = "3F";
+                                            dr["WClass Code"] = ObjClassCode;
+
+                                        }
+
+
+                                        dtDetailFinal.AcceptChanges();
+                                        continue;
+
+                                    }
+                                }
+                                else
+                                {
+
+                                    dr["IsValid"] = 0;
+                                    dtDetailFinal.AcceptChanges();
+                                }
+                            }
+                            else
+                            {
+                                dr["IsValid"] = 0;
+                                dtDetailFinal.AcceptChanges();
+                            }
+
+
+
+                        }
+
+                        //Neither the OBL nor the skeleton has an NMFC#, but the class matches
+                        if (drdata9 != null && (string.IsNullOrEmpty(strNMFC) || strNMFC == "0"))
+                        {
+                            DataRow[] drdata5 = null;
+                            if (drdata9.Count() > 0)
+                                drdata5 = drdata9.CopyToDataTable().Select("SBCMCL='" + Convert.ToString(dr["Class Code"]).Trim() + "'");
+
+                            string Description = Convert.ToString(dr["Description"]);
+
+                            if (drdata5 != null && !string.IsNullOrEmpty(Description))
+                            {
+
+                                if (drdata5.Count() > 0)
+                                {
+                                    if (CheckValidWord(Convert.ToString(drdata5[0]["SBDES"]).ToUpper(), new string[] { Description.ToUpper() }))
+                                    {
+
+                                        dr["IsValid"] = 1;
+                                        dr["Description"] = drdata5[0]["SBDES"];
+
+
+                                        if (!Convert.IsDBNull(dr["WDescription"]))
+                                        {
+                                            ObjDescription = (clsCnCWord)dr["WDescription"];
+                                            ObjDescription.strWord = Convert.ToString(drdata5[0]["SBDES"]);
+                                            ObjDescription.Confidence = 100;
+                                            ObjDescription.Flag = "1";
+                                            ObjDescription.Remarks = "2F";
+                                            dr["WDescription"] = ObjDescription;
+
+                                        }
+                                        else
+                                        {
+                                            ObjDescription = GetDefaultWord(1, Convert.ToString(drdata5[0]["SBDES"]));
+                                            ObjDescription.Confidence = 100;
+                                            ObjDescription.Flag = "1";
+                                            ObjDescription.Remarks = "2F";
+                                            dr["WDescription"] = ObjDescription;
+                                        }
+
+                                        if (!Convert.IsDBNull(dr["WClass Code"]))
+                                        {
+                                            ObjClassCode = (clsCnCWord)dr["WClass Code"];
+                                            ObjClassCode.Confidence = 100;
+                                            ObjClassCode.Flag = "1";
+                                            ObjClassCode.Remarks = "3F";
+                                            dr["WClass Code"] = ObjClassCode;
+
+                                        }
+
+
+                                        dtDetailFinal.AcceptChanges();
+                                        continue;
+
+                                    }
+                                }
+                                else
+                                {
+                                    //The OBL does not have an NMFC#, but has a word description and class code or no class code at all 
+                                    //and the skeleton only shows a MEMO description line
+
+                                    //
+
+                                    drdata5 = drdata9.CopyToDataTable().Select("SBCMCL='MEMO'");
+
+                                    if (drdata5 != null && !string.IsNullOrEmpty(Description) && (!string.IsNullOrEmpty(strClassCode) || strClassCode != "0"))
+                                    {
+
+                                        if (drdata5.Count() > 0)
+                                        {
+                                            foreach (var item in drdata5)
+                                            {
+
+
+
+                                                if (CheckValidWord(Convert.ToString(item["SBDES"]).ToUpper(), new string[] { Description.Replace("AND", "").ToUpper() }))
+                                                {
+
+                                                    dr["IsValid"] = 1;
+                                                    dr["Description"] = item["SBDES"];
+
+
+                                                    if (!Convert.IsDBNull(dr["WDescription"]))
+                                                    {
+                                                        ObjDescription = (clsCnCWord)dr["WDescription"];
+                                                        ObjDescription.strWord = Convert.ToString(item["SBDES"]);
+                                                        ObjDescription.Confidence = 100;
+                                                        ObjDescription.Flag = "1";
+                                                        ObjDescription.Remarks = "2F";
+                                                        dr["WDescription"] = ObjDescription;
+
+                                                    }
+                                                    else
+                                                    {
+                                                        ObjDescription = GetDefaultWord(1, Convert.ToString(item["SBDES"]));
+                                                        ObjDescription.Confidence = 100;
+                                                        ObjDescription.Flag = "1";
+                                                        ObjDescription.Remarks = "2F";
+                                                        dr["WDescription"] = ObjDescription;
+                                                    }
+
+                                                    if (!Convert.IsDBNull(dr["WClass Code"]))
+                                                    {
+                                                        ObjClassCode = (clsCnCWord)dr["WClass Code"];
+                                                        ObjClassCode.Confidence = 100;
+                                                        ObjClassCode.Flag = "1";
+                                                        ObjClassCode.Remarks = "3F";
+                                                        dr["WClass Code"] = ObjClassCode;
+
+                                                    }
+
+
+                                                    dtDetailFinal.AcceptChanges();
+                                                    continue;
+
+                                                }
+                                            }
+                                        }
+                                        else
+                                        {
+
+                                            dr["IsValid"] = 0;
+                                            dtDetailFinal.AcceptChanges();
+                                        }
+                                    }
+                                    else
+                                    {
+                                        dr["IsValid"] = 0;
+                                        dtDetailFinal.AcceptChanges();
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                dr["IsValid"] = 0;
+                                dtDetailFinal.AcceptChanges();
+                            }
+
+                        }
+
+                        //if ((string.IsNullOrEmpty(ObjDescription.Flag) || ObjDescription.Flag == "0") && !string.IsNullOrEmpty(ObjDescription.strWord))
+                        //{
+                        //    ObjDescription.strWord = "";
+                        //    ObjDescription.Confidence = 0;
+                        //    dr["WDescription"] = ObjDescription;
+                        //    dr["Description"] = ObjDescription.strWord;
+                        //    dtDetailFinal.AcceptChanges();
+                        //}
+
+                        if (ObjClassCode != null)
+                        {
+                            if (string.IsNullOrEmpty(ObjClassCode.Flag) || ObjClassCode.Flag == "0")
+                            {
+
+                                if (!string.IsNullOrEmpty(ObjClassCode.strWord))
+                                {
+                                    double result;
+                                    if (!double.TryParse(ObjClassCode.strWord, out result))
+                                    {
+
+                                        ObjClassCode.strWord = "";
+                                        ObjClassCode.Confidence = 0;
+                                        dr["WClass Code"] = ObjClassCode;
+                                        dr["Class Code"] = ObjClassCode.strWord;
+                                        dtDetailFinal.AcceptChanges();
+                                    }
+                                }
+                            }
+                        }
+
+                        if (ObjWeight != null)
+                        {
+
+                            if (string.IsNullOrEmpty(ObjWeight.Flag) || ObjWeight.Flag == "0")
+                            {
+
+
+                                if (!string.IsNullOrEmpty(ObjWeight.strWord))
+                                {
+                                    if (ObjWeight.strWord.Length <= 1)
+                                    {
+
+                                        ObjWeight.strWord = "";
+                                        ObjWeight.Confidence = 0;
+                                        dr["WWeight"] = ObjWeight;
+                                        dr["Weight"] = ObjWeight.strWord;
+                                        dtDetailFinal.AcceptChanges();
+                                    }
+                                    string[] arrWeight = ObjWeight.strWord.Split(' ');
+
+                                    if (arrWeight.Count() == 2)
+                                    {
+                                        if (!(arrWeight[1].ToLower() == "lbs" || arrWeight[1].ToLower() == "lb"))
+                                        {
+                                            ObjWeight.strWord = "";
+                                            ObjWeight.Confidence = 0;
+                                            dr["WWeight"] = ObjWeight;
+                                            dr["Weight"] = ObjWeight.strWord;
+                                            dtDetailFinal.AcceptChanges();
+                                        }
+                                        else
+                                        {
+
+                                            ObjWeight.strWord = "";
+                                            ObjWeight.Confidence = 0;
+                                            dr["WWeight"] = ObjWeight;
+                                            dr["Weight"] = ObjWeight.strWord;
+                                            dtDetailFinal.AcceptChanges();
+                                        }
+                                    }
+                                    else if (arrWeight.Count() > 1)
+                                    {
+
+                                        ObjWeight.strWord = "";
+                                        ObjWeight.Confidence = 0;
+                                        dr["WWeight"] = ObjWeight;
+                                        dr["Weight"] = ObjWeight.strWord;
+                                        dtDetailFinal.AcceptChanges();
+                                    }
+
+
+                                }
+                            }
+
+                            if (ObjWeight.strWord == "0" || Convert.ToDouble(ObjWeight.strWord) == 0.00 || ObjWeight.strWord == "0.00")
+                            {
+                                ObjWeight.strWord = "";
+                                ObjWeight.Confidence = 0;
+                                dr["WWeight"] = ObjWeight;
+                                dr["Weight"] = ObjWeight.strWord;
+                                dtDetailFinal.AcceptChanges();
+                            }
+                        }
+                        if (ObjQuantity != null)
+                        {
+                            if (ObjQuantity.strWord == "0")
+                            {
+                                ObjQuantity.strWord = "";
+                                ObjQuantity.Confidence = 0;
+                                dr["WQuantity"] = ObjQuantity;
+                                dr["Quantity"] = ObjQuantity.strWord;
+                                dtDetailFinal.AcceptChanges();
+                            }
+                        }
+
+                        if (ObjNMFC != null)
+                        {
+                            if (string.IsNullOrEmpty(ObjNMFC.Flag) || ObjNMFC.Flag == "0")
+                            {
+                                if (!string.IsNullOrEmpty(ObjNMFC.strWord))
+                                {
+                                    if (ObjNMFC.strWord.Length > 12 || ObjNMFC.strWord.Length < 5)
+                                    {
+
+                                        ObjNMFC.strWord = "";
+                                        ObjNMFC.Confidence = 0;
+                                        dr["WNMFC"] = ObjNMFC;
+                                        dr["NMFC"] = ObjNMFC.strWord;
+                                        dtDetailFinal.AcceptChanges();
+                                    }
+
+                                    string[] arrNmfc = ObjNMFC.strWord.Split('-');
+
+                                    if (!arrNmfc[0].All(x => char.IsDigit(x)))
+                                    {
+
+                                        ObjNMFC.strWord = "";
+                                        ObjNMFC.Confidence = 0;
+                                        dr["WNMFC"] = ObjNMFC;
+                                        dr["NMFC"] = ObjNMFC.strWord;
+                                        dtDetailFinal.AcceptChanges();
+
+                                    }
+
+
+                                    if (arrNmfc.Count() == 2)
+                                        if (!arrNmfc[1].All(x => char.IsDigit(x)))
+                                        {
+                                            ObjNMFC.strWord = "";
+                                            ObjNMFC.Confidence = 0;
+                                            dr["WNMFC"] = ObjNMFC;
+                                            dr["NMFC"] = ObjNMFC.strWord;
+                                            dtDetailFinal.AcceptChanges();
+                                        }
+
+                                }
+                            }
+                        }
+
+                    }
+                }
+            done:
+
+
+                foreach (DataRow dr in dtDetailFinal.Rows)
+                {
+                    if (Convert.ToString(dr["NMFC"]).Contains("-"))
+                        arrNMFC = Convert.ToString(dr["NMFC"]).Split('-');
+                    else if (Convert.ToString(dr["NMFC"]).Contains("."))
+                        arrNMFC = Convert.ToString(dr["NMFC"]).Split('.');
+                    else
+                        arrNMFC = Convert.ToString(dr["NMFC"]).Split('-');
+
+                    strNMFC = string.Empty; strSub = string.Empty; strClassCode = string.Empty;
+
+                    if (arrNMFC.Count() > 1)
+                    {
+                        strNMFC = arrNMFC[0].Trim().Replace("l", "");
+
+                        if (arrNMFC[1] == "00" || arrNMFC[1] == "0")
+                        {
+                            strSub = "0";
+                        }
+                        else
+                            strSub = arrNMFC[1].Replace('0', ' ').Trim();
+                    }
+                    else
+                    {
+                        strNMFC = Convert.ToString(dr["NMFC"]).Replace("l", "");
+                        strSub = "0";
+                    }
+                    if (!Convert.IsDBNull(dr["WNMFC"]))
+                    {
+                        word = (clsCnCWord)dr["WNMFC"];
+                        //LineNo = word.LineNo;
+                        ObjNMFC = (clsCnCWord)dr["WNMFC"];
+                    }
+                    else
+                    {
+                        ObjNMFC = null;
+                    }
+
+                    if (!Convert.IsDBNull(dr["WQuantity"]))
+                    {
+
+                        word = (clsCnCWord)dr["WQuantity"];
+                        //LineNo = word.LineNo;
+                        ObjQuantity = (clsCnCWord)dr["WQuantity"];
+                    }
+                    else
+                    {
+                        ObjQuantity = null;
+                    }
+
+                    if (!Convert.IsDBNull(dr["WClass Code"]))
+                    {
+                        word = (clsCnCWord)dr["WClass Code"];
+                        //LineNo = word.LineNo;
+                        ObjClassCode = (clsCnCWord)dr["WClass Code"];
+                    }
+                    else
+                    {
+                        ObjClassCode = null;
+                    }
+
+                    if (!Convert.IsDBNull(dr["WDescription"]))
+                    {
+                        word = (clsCnCWord)dr["WDescription"];
+                        //LineNo = word.LineNo;
+                        ObjDescription = (clsCnCWord)dr["WDescription"];
+                    }
+
+                    if (!Convert.IsDBNull(dr["WWeight"]))
+                    {
+                        word = (clsCnCWord)dr["WWeight"];
+                        //LineNo = word.LineNo;
+                        ObjWeight = (clsCnCWord)dr["WWeight"];
+                    }
+                    else
+                    {
+                        ObjWeight = null;
+                    }
+
+
+                    if (ObjClassCode != null)
+                    {
+                        if (string.IsNullOrEmpty(ObjClassCode.Flag) || ObjClassCode.Flag == "0")
+                        {
+
+                            if (!string.IsNullOrEmpty(ObjClassCode.strWord))
+                            {
+                                double result;
+                                if (!double.TryParse(ObjClassCode.strWord, out result))
+                                {
+
+                                    ObjClassCode.strWord = "";
+                                    ObjClassCode.Confidence = 0;
+                                    dr["WClass Code"] = ObjClassCode;
+                                    dr["Class Code"] = ObjClassCode.strWord;
+                                    dtDetailFinal.AcceptChanges();
+                                }
+                            }
+                        }
+                    }
+
+                    if (ObjWeight != null)
+                    {
+
+                        if (string.IsNullOrEmpty(ObjWeight.Flag) || ObjWeight.Flag == "0")
+                        {
+
+
+                            if (!string.IsNullOrEmpty(ObjWeight.strWord))
+                            {
+                                if (ObjWeight.strWord.Length <= 1)
+                                {
+
+                                    ObjWeight.strWord = "";
+                                    ObjWeight.Confidence = 0;
+                                    dr["WWeight"] = ObjWeight;
+                                    dr["Weight"] = ObjWeight.strWord;
+                                    dtDetailFinal.AcceptChanges();
+                                }
+                                string[] arrWeight = ObjWeight.strWord.Split(' ');
+
+                                if (arrWeight.Count() == 2)
+                                {
+                                    if (!(arrWeight[1].ToLower() == "lbs" || arrWeight[1].ToLower() == "lb"))
+                                    {
+                                        ObjWeight.strWord = "";
+                                        ObjWeight.Confidence = 0;
+                                        dr["WWeight"] = ObjWeight;
+                                        dr["Weight"] = ObjWeight.strWord;
+                                        dtDetailFinal.AcceptChanges();
+                                    }
+                                    else
+                                    {
+
+                                        ObjWeight.strWord = "";
+                                        ObjWeight.Confidence = 0;
+                                        dr["WWeight"] = ObjWeight;
+                                        dr["Weight"] = ObjWeight.strWord;
+                                        dtDetailFinal.AcceptChanges();
+                                    }
+                                }
+                                else if (arrWeight.Count() > 1)
+                                {
+
+                                    ObjWeight.strWord = "";
+                                    ObjWeight.Confidence = 0;
+                                    dr["WWeight"] = ObjWeight;
+                                    dr["Weight"] = ObjWeight.strWord;
+                                    dtDetailFinal.AcceptChanges();
+                                }
+
+
+                            }
+                        }
+
+                        if (ObjWeight.strWord == "0" || Convert.ToDouble(ObjWeight.strWord) == 0.00 || ObjWeight.strWord == "0.00")
+                        {
+                            ObjWeight.strWord = "";
+                            ObjWeight.Confidence = 0;
+                            dr["WWeight"] = ObjWeight;
+                            dr["Weight"] = ObjWeight.strWord;
+                            dtDetailFinal.AcceptChanges();
+                        }
+                    }
+                    if (ObjQuantity != null)
+                    {
+                        if (ObjQuantity.strWord == "0")
+                        {
+                            ObjQuantity.strWord = "";
+                            ObjQuantity.Confidence = 0;
+                            dr["WQuantity"] = ObjQuantity;
+                            dr["Quantity"] = ObjQuantity.strWord;
+                            dtDetailFinal.AcceptChanges();
+                        }
+                    }
+
+                    if (ObjNMFC != null)
+                    {
+                        if (string.IsNullOrEmpty(ObjNMFC.Flag) || ObjNMFC.Flag == "0")
+                        {
+                            if (!string.IsNullOrEmpty(ObjNMFC.strWord))
+                            {
+                                if (ObjNMFC.strWord.Length > 12 || ObjNMFC.strWord.Length < 5)
+                                {
+
+                                    ObjNMFC.strWord = "";
+                                    ObjNMFC.Confidence = 0;
+                                    dr["WNMFC"] = ObjNMFC;
+                                    dr["NMFC"] = ObjNMFC.strWord;
+                                    dtDetailFinal.AcceptChanges();
+                                }
+
+                                string[] arrNmfc = ObjNMFC.strWord.Split('-');
+
+                                if (!arrNmfc[0].All(x => char.IsDigit(x)))
+                                {
+
+                                    ObjNMFC.strWord = "";
+                                    ObjNMFC.Confidence = 0;
+                                    dr["WNMFC"] = ObjNMFC;
+                                    dr["NMFC"] = ObjNMFC.strWord;
+                                    dtDetailFinal.AcceptChanges();
+
+                                }
+
+
+                                if (arrNmfc.Count() == 2)
+                                    if (!arrNmfc[1].All(x => char.IsDigit(x)))
+                                    {
+                                        ObjNMFC.strWord = "";
+                                        ObjNMFC.Confidence = 0;
+                                        dr["WNMFC"] = ObjNMFC;
+                                        dr["NMFC"] = ObjNMFC.strWord;
+                                        dtDetailFinal.AcceptChanges();
+                                    }
+                            }
+                        }
+                    }
+
+
+                }
+
+                if (PublicComponents.htMyVariable.ContainsKey("BOLSET4_LineItemValue") == true)
+                {
+                    PublicComponents.htMyVariable.Remove("BOLSET4_LineItemValue");
+                }
+
+                PublicComponents.htMyVariable.Add("BOLSET4_LineItemValue", dtDetailFinal);
+
+
+
+                Form1 f = new Form1(dtDetailFinal, dtGetData);
+                f.Size = new System.Drawing.Size(1000, 500);
+                f.StartPosition = FormStartPosition.WindowsDefaultBounds;
+                f.SetDesktopLocation(1000, 1000);
+                f.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                //  MessageBox.Show("SET4:F3:Line1: " + ex.StackTrace);
+            }
+            finally
+            {
+
+
+                if (dtHeader != null)
+                {
+                    dtHeader.Dispose();
+                }
+
+                if (dtDetail != null)
+                {
+                    dtDetail.Dispose();
+                }
+
+                if (dtMapTable != null)
+                {
+                    dtMapTable.Dispose();
+                }
+
+                if (dtDetailFinal != null)
+                {
+                    dtDetailFinal.Dispose();
+                }
+
+                strNMFC = null; strSub = null; strClassCode = null;
+
+                PkgCodes = null;
+
+                drdata = null;
+                drdata1 = null;
+                drdata3 = null;
+                drdata4 = null;
+
+                ObjDescription = null;
+                ObjNMFC = null;
+                ObjClassCode = null;
+                ObjWeight = null;
+                ObjQuantity = null;
+                ObjHazmatCode = null;
+                ObjPalletCode = null;
+                ObjWord = null;
+                drmap = null;
+                word = null;
+                arrNMFC = null;
+                Pkgcode = null;
+                code = null;
+                //int PreviousLineno = 0;
+
+                //int hx1, hy1, hx2, hy2;
+                //int x1, y1, x2, y2;
+
+
+
+                //seperator = null;
+
+                //batchname = null;
+
+                //file = null;
+
+
+
+
+                //seperator1 =  null;
+
+                //connStr = null;
+
+                //arrFilename = null;
+
+                // PROFilename=null;
+
+
+
+                GC.Collect();
+
+            }
+
+            return objRetStructF3;
+        }
+
+        public static DataTable GetDataTableByText_1(string connectionString, string queryString, OdbcParameter[] parameters = null)
+        {
+            DataTable dataTable = new DataTable();
+            try
+            {
+                using (OdbcConnection connection = new OdbcConnection(connectionString))
+                {
+                    using (OdbcCommand cmd = new OdbcCommand(queryString, connection))
+                    {
+                        if (connection != null && !string.IsNullOrEmpty(queryString))
+                        {
+                            cmd.CommandType = CommandType.Text;
+                            if (parameters != null)
+                            {
+                                cmd.Parameters.AddRange(parameters);
+                            }
+                            using (OdbcDataAdapter da = new OdbcDataAdapter(cmd))
+                            {
+                                da.Fill(dataTable);
+                            }
+                        }
+                    }
+                }
+                return dataTable;
+            }
+            catch (Exception ex)
+            {
+                //MessageBox.Show(ex.Message);
+                return null;
+            }
+        }
+
+        public static DataTable GetDataTableByText(string connectionString, string queryString, OdbcParameter[] parameters = null)
+        {
+            DataTable dataTable = new DataTable();
+            try
+            {
+                //using (OdbcConnection connection = new OdbcConnection(connectionString))
+                //{​​​​​
+                //connection.Open();
+                if (iQPUBLIC.PublicComponents.htMyVariable.ContainsKey("DB2Conn") == false)
+                {
+                    OdbcConnection db2Connection = new OdbcConnection();
+
+                    if (iQPUBLIC.PublicComponents.htMyVariable.ContainsKey("ConnectionString_DB2Conn") == true)
+                    {
+                        connectionString = (string)iQPUBLIC.PublicComponents.htMyVariable["ConnectionString_DB2Conn"];
+                    }
+                    else
+                    {
+                        connectionString = ConfigurationManager.ConnectionStrings["AS400DBConnString"].ToString();
+
+                    }
+
+                    db2Connection.ConnectionString = connectionString;
+
+                    if (db2Connection.State != ConnectionState.Open)
+                    {
+                        db2Connection.Open();
+                        iQPUBLIC.PublicComponents.htMyVariable.Add("DB2Conn", db2Connection);
+                    }
+                }
+                OdbcConnection connection = (OdbcConnection)iQPUBLIC.PublicComponents.htMyVariable["DB2Conn"];
+                if (connection.State != ConnectionState.Open)
+                {
+                    if (iQPUBLIC.PublicComponents.htMyVariable.ContainsKey("ConnectionString_DB2Conn") == true)
+                    {
+                        connectionString = (string)iQPUBLIC.PublicComponents.htMyVariable["ConnectionString_DB2Conn"];
+                    }
+                    else
+                    {
+                        connectionString = ConfigurationManager.ConnectionStrings["AS400DBConnString"].ToString();
+
+                    }
+
+                    connection.ConnectionString = connectionString;
+                    connection.Open();
+                    if (iQPUBLIC.PublicComponents.htMyVariable.ContainsKey("DB2Conn") == true)
+                    {
+                        iQPUBLIC.PublicComponents.htMyVariable.Remove("DB2Conn");
+                    }
+                    iQPUBLIC.PublicComponents.htMyVariable.Add("DB2Conn", connection);
+                }
+
+
+                using (OdbcCommand cmd = new OdbcCommand(queryString, connection))
+                {
+                    if (connection != null && !string.IsNullOrEmpty(queryString))
+                    {
+                        cmd.CommandType = CommandType.Text;
+                        if (parameters != null)
+                        {
+                            cmd.Parameters.AddRange(parameters);
+                        }
+                        using (OdbcDataAdapter da = new OdbcDataAdapter(cmd))
+                        {
+                            da.Fill(dataTable);
+                        }
+                    }
+                }
+                //}​​​​​
+                return dataTable;
+            }
+            catch (Exception ex)
+            {
+                //MessageBox.Show(ex.Message);
+                return null;
+            }
+        }
+        //public static DataTable GetDataTableByText(string queryString, OdbcParameter[] parameters = null)
+        //{
+        //    DataTable dataTable = new DataTable();
+        //    try
+        //    {
+        //        Changes for app config
+        //        if (string.IsNullOrEmpty(iQPUBLIC.PublicComponents.DbConnectionString1))
+        //        {
+        //            iQPUBLIC.PublicComponents.DbConnectionString1 = ConfigurationManager.ConnectionStrings["DB2Conn"].ToString();
+        //        }
+
+        //        //using (OdbcConnection connection = new OdbcConnection(connectionString))
+        //        //{​​​​​
+        //        //connection.Open();
+        //        if (iQPUBLIC.PublicComponents.htMyVariable.ContainsKey("DB2Conn") == false)
+        //        {
+        //            OdbcConnection db2Connection = new OdbcConnection();
+        //            db2Connection.ConnectionString = iQPUBLIC.PublicComponents.DbConnectionString1 ;
+
+        //            if (db2Connection.State != ConnectionState.Open)
+        //            {
+        //                db2Connection.Open();
+        //                iQPUBLIC.PublicComponents.htMyVariable.Add("DB2Conn", db2Connection);
+        //            }
+        //        }
+        //        OdbcConnection connection = (OdbcConnection)iQPUBLIC.PublicComponents.htMyVariable["DB2Conn"];
+
+        //        if (connection.State != ConnectionState.Open)
+        //        {
+        //            connection.ConnectionString = iQPUBLIC.PublicComponents.DbConnectionString1;
+
+        //            connection.Open();
+        //            if (iQPUBLIC.PublicComponents.htMyVariable.ContainsKey("DB2Conn") == true)
+        //            {
+        //                iQPUBLIC.PublicComponents.htMyVariable.Remove("DB2Conn");
+        //            }
+        //            iQPUBLIC.PublicComponents.htMyVariable.Add("DB2Conn", connection);
+        //        }
+        //        using (OdbcCommand cmd = new OdbcCommand(queryString, connection))
+        //        {
+        //            if (connection != null && !string.IsNullOrEmpty(queryString))
+        //            {
+        //                cmd.CommandType = CommandType.Text;
+        //                if (parameters != null)
+        //                {
+        //                    cmd.Parameters.AddRange(parameters);
+        //                }
+        //                using (OdbcDataAdapter da = new OdbcDataAdapter(cmd))
+        //                {
+        //                    da.Fill(dataTable);
+        //                }
+        //            }
+        //        }
+        //        //}​​​​​
+        //        return dataTable;
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        //MessageBox.Show(ex.Message);
+        //        return null;
+        //    }
+        //}
+
+
+        private RetStructF3 F3_AutoLocate_LineItem(clsCncMetaData ObjMetaData, int intCurrPageNumber, string strArg)
+        {
+            RetStructF3 objRetStructF3 = new RetStructF3();
+            objRetStructF3.Status = "F";
+            objRetStructF3.NoOfieldsSuspects = 0;
+
+
+            try
+            {
+
+                objRetStructF3 = Header(ObjMetaData, intCurrPageNumber, strArg);
+
+            }
+
+
+            catch (Exception ex)
+            {
+                //MessageBox.Show("F3: F3_AutoLocate_BillOfLading " + ex.Message);
+            }
+
+
+            return objRetStructF3;
+        }
+
+
+        #region BOLSET4
+        DataTable dtKeyword = new DataTable();
+        DataTable dtDetailLine = new DataTable();
+        DataTable dtDetailLineData = new DataTable();
+        DataTable dtDetail = new DataTable();
+
+        string LineNo = "0";
+
+
+        public RetStructF3 Header(clsCncMetaData ObjMetaData, int intCurrPageNumber, string stringArgs)
+        {
+            RetStructF3 objRetStructF3 = new RetStructF3();
+            objRetStructF3.Status = "F";
+            objRetStructF3.NoOfieldsSuspects = 0;
+
+            List<int> ConfLevel = new List<int>();
+
+            //int h = ObjMetaData.Page[intCurrPageNumber].ImageHeight;
+            //int w = ObjMetaData.Page[intCurrPageNumber].ImageWidth;
+            //int Wid = w;
+            //int Height = h / 2;
+
+            List<clsCnCWord> possibleword = new List<clsCnCWord>();
+            List<clsCnCWord> Finalpossibleword = new List<clsCnCWord>();
+            //MakedtDetailFinal();
+
+            try
+            {
+                string LineNo = "0";
+                //for (intCurrPageNumber = 1; intCurrPageNumber < ObjMetaData.PageCount; intCurrPageNumber++)
+                //possibleword = F3_GetValue(ObjMetaData, intCurrPageNumber, Synonyms, 0, 0, Wid, h);
+                LineNo = F3_GetValue(ObjMetaData, intCurrPageNumber, stringArgs);
+                //F3_GetDetailValue(ObjMetaData, intCurrPageNumber, Synonyms, LineNo);
+                clsCnCLine line = new clsCnCLine();
+
+                if (!string.IsNullOrEmpty(LineNo))
+                {
+                    ClsCNC Objcnc = new ClsCNC();
+                    clsCnCWord word = Objcnc.MergeWords(ObjMetaData.Page[intCurrPageNumber].Line[Convert.ToInt32(LineNo)].Word);
+                    Finalpossibleword.Add(word);
+                }
+
+                List<int> conflevel = new List<int>();
+                conflevel.Clear();
+
+                //if (!(possibleword == null))
+                //{
+                //    for (int i = 0; i <= possibleword.Count - 1; i++)
+                //    {
+
+                //        if (CheckValidWord(possibleword[i].strWord.ToUpper().Trim().Replace("'", "`"), new string[] { "DESCRIPTION" }))
+                //        {
+                //            Finalpossibleword.Add(possibleword[i]);
+                //        }
+
+
+                //    }
+                //}
+
+                if (!(Finalpossibleword == null))
+                {
+
+                    if (Finalpossibleword.Count == 0)
+                    {
+                        conflevel.Clear();
+                        Finalpossibleword.Add(GetDefaultWord(1, " "));
+                        conflevel.Add(90);
+
+                        objRetStructF3.NoOfieldsSuspects = Finalpossibleword.Count;
+                        objRetStructF3.Words = Finalpossibleword;
+                        objRetStructF3.ConfidenceLevelofSuspect = conflevel;
+                        objRetStructF3.Status = "F";
+                        //objRetStructF3.Flag = "Y";
+                        //objRetStructF3.ManualConfirmation = "N";
+                        return objRetStructF3;
+
+                    }
+                    for (int i = 0; i <= Finalpossibleword.Count - 1; i++)
+                    {
+                        conflevel.Add(90);
+
+                    }
+                    objRetStructF3.NoOfieldsSuspects = Finalpossibleword.Count;
+                    objRetStructF3.Words = Finalpossibleword;
+                    objRetStructF3.ConfidenceLevelofSuspect = conflevel;
+                    objRetStructF3.Status = "S";
+                    objRetStructF3.Flag = "Y";
+                    objRetStructF3.ManualConfirmation = "N";
+
+
+                    //if (Finalpossibleword.Count > 1)
+                    //    objRetStructF3.ManualConfirmation = "Y";
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                //Error.Log File
+            }
+            finally
+            {
+                GC.Collect();
+            }
+
+            return objRetStructF3;
+        }
+
+        public DataTable GetHeaderLine(clsCncMetaData ObjMetaData, int intCurrPageNumber, string StrArgs)
+        {
+
+            int h = ObjMetaData.Page[intCurrPageNumber].ImageHeight;
+            int w = ObjMetaData.Page[intCurrPageNumber].ImageWidth;
+            int Wid = w;
+            int Height = h / 2;
+            DataTable H;
+            //Synonyms = "Quantity~Weight~Cl~Item Description~Commodity Description~Class~NMFC~Qty~Pieces~Units~Qty~CTNS~Pieces/Quantity~Package~WT~Pkgs~Net Weight~Gross Weight";
+            //intCurrPageNumber = 1;
+            MakeDtDeatilLineData();
+
+            LineNo = F3_GetValue(ObjMetaData, intCurrPageNumber, StrArgs);
+
+            int lineno = Convert.ToInt32(LineNo);
+
+            if (lineno != 0)
+            {
+
+                //foreach (clsCnCWord word in ObjMetaData.Page[intCurrPageNumber].Line[lineno].Word)
+                //{
+                //    if (word != null)
+                //    {
+                //        DataRow dr = dtDetailLineData.NewRow();
+
+                //        dr["Page No"] = intCurrPageNumber;
+                //        dr["Line No"] = lineno;
+                //        dr["Word No"] = word.WordNumber;
+                //        dr["Word"] = word.strWord;
+                //        dr["Left"] = word.Left;
+                //        dr["Top"] = word.Top;
+                //        dr["Right"] = word.Right;
+                //        dr["Bottom"] = word.Bottom;
+                //        dtDetailLineData.Rows.Add(dr);
+
+                //    }
+                //}
+
+                ClsCNC oClsCnc = new ClsCNC();
+
+                List<clsCnCLine> Lines = new List<clsCnCLine>();
+
+                List<int> Linenos = new List<int>();
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno + 1]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno + 2]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno + 3]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno + 4]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno - 1]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno - 2]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno - 3]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno - 4]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno - 5]);
+                Lines.Add(ObjMetaData.Page[intCurrPageNumber].Line[lineno - 6]);
+
+                string[] args = Synonyms.Split(new char[] { '~' });
+
+                for (int i = 0; i <= Lines.Count - 1; i++)
+                {
+                    int matchword = 0;
+                    if (Lines[i] != null)
+                    {
+                        //Possiblewords = new List<clsCnCWord>();
+
+                        for (int j = 0; j <= args.Length - 1; j++)
+                        {
+                            for (int k = 0; k <= Lines[i].WordCount; k++)
+                            {
+                                //    if (Lines[i].WordCount <=3)
+                                //        break;
+
+                                if (Lines[i].Word[k] != null)
+                                {
+                                    if (CheckValidWord(Lines[i].Word[k].strWord.ToUpper().Trim().Replace("'", "`"), new String[] { args[j].ToUpper() }) || Lines[i].Word[k].strWord.ToUpper().Trim().Contains(args[j].ToUpper()))
+                                    {
+                                        matchword++;
+                                    }
+                                }
+                            }
+
+
+                        }
+
+                        if (matchword >= 1)
+                        {
+                            Linenos.Add(Lines[i].LineNo);
+                            continue;
+                        }
+                    }
+                }
+
+
+                foreach (int Lno in Linenos)
+                {
+
+                    foreach (clsCnCWord word in ObjMetaData.Page[intCurrPageNumber].Line[Lno].Word)
+                    {
+                        if (word != null)
+                        {
+
+                            if (word.strWord.ToUpper().Trim().Replace("'", "`").Contains("DESCRIPTION") ||
+                                    word.strWord.ToUpper().Trim().Replace("'", "`").Contains("QTY") || word.strWord.ToUpper().Trim().Replace("'", "`").Contains("TYPE"))
+                            {
+
+                                DataRow dr = dtDetailLineData.NewRow();
+
+                                dr["Page No"] = intCurrPageNumber;
+                                dr["Line No"] = word.LineNo;
+                                dr["Word No"] = word.WordNumber;
+                                dr["Word"] = word.strWord;
+                                dr["Left"] = word.Left;
+                                dr["Top"] = word.Top;
+                                dr["Right"] = word.Right;
+                                dr["Bottom"] = word.Bottom;
+                                dtDetailLineData.Rows.Add(dr);
+                                continue;
+                            }
+                            //if (word.strWord.ToUpper().Trim().Replace("'", "`").Contains("NET WEIGHT") || word.strWord.ToUpper().Trim().Replace("'", "`").Contains("H.UNITS"))
+                            //    continue;
+
+                            for (int j = 0; j <= args.Length - 1; j++)
+                            {
+
+                                if (CheckValidWord(word.strWord.ToUpper().Trim().Replace("'", "`"), new String[] { args[j] }) || word.strWord.ToUpper().Trim().Contains(args[j].ToUpper()))
+                                {
+                                    string filter = "Word='" + word.strWord + "'";
+
+                                    DataView view = new DataView(dtDetailLineData);
+                                    view.RowFilter = filter;
+                                    DataTable dtResult = view.ToTable();
+
+                                    if (dtResult.Rows.Count == 0)
+                                    {
+                                        if (word.strWord.Length - args[j].Length <= 4)
+                                        {
+                                            DataRow dr = dtDetailLineData.NewRow();
+
+                                            dr["Page No"] = intCurrPageNumber;
+                                            dr["Line No"] = word.LineNo;
+                                            dr["Word No"] = word.WordNumber;
+                                            dr["Word"] = word.strWord;
+                                            dr["Left"] = word.Left;
+                                            dr["Top"] = word.Top;
+                                            dr["Right"] = word.Right;
+                                            dr["Bottom"] = word.Bottom;
+                                            dtDetailLineData.Rows.Add(dr);
+                                        }
+                                    }
+                                }
+
+
+                            }
+                        }
+                    }
+
+                }
+            }
+
+            return dtDetailLineData;
+        }
+
+        public DataTable GetDataLineDeail(clsCncMetaData ObjMetaData, int intCurrPageNumber, string strargs)
+        {
+            int h = ObjMetaData.Page[intCurrPageNumber].ImageHeight;
+            int w = ObjMetaData.Page[intCurrPageNumber].ImageWidth;
+            int Wid = w;
+            int Height = h / 2;
+            DataTable dtDetail;
+            //Synonyms = "Quantity~Weight~Cl~Description~Class~NMFC~Qty~Pieces~Units~Qty~CTNS~Pieces/Quantity~Package";
+            //Synonyms = "Quantity~Weight~Cl~Item Description~Commodity Description~Class~NMFC~Qty~Pieces~Units~Qty~CTNS~Pieces/Quantity~Package~WT~Pkgs~Net Weight~Gross Weight~Pallet";
+            //intCurrPageNumber = 1;
+
+            try
+            {
+
+
+                //possibleword = F3_GetValue(ObjMetaData, intCurrPageNumber, Synonyms, 0, 0, Wid, h);
+
+                LineNo = F3_GetValue(ObjMetaData, intCurrPageNumber, strargs);
+
+                dtDetail = F3_GetDetailValue(ObjMetaData, intCurrPageNumber, "0", LineNo);
+                MakeDtDeatilLineData();
+                if (dtDetail != null)
+                {
+                    if (dtDetail.Rows.Count > 0)
+                    {
+                        foreach (DataRow item in dtDetail.Rows)
+                        {
+                            int DetailLineNo = Convert.ToInt32(item["Line No"]);
+                            int DetailPageNo = Convert.ToInt32(item["Page No"]);
+
+
+                            if (DetailLineNo != 0)
+                            {
+
+                                foreach (clsCnCWord word in ObjMetaData.Page[DetailPageNo].Line[DetailLineNo].Word)
+                                {
+                                    if (word != null)
+                                    {
+                                        DataRow dr = dtDetailLineData.NewRow();
+
+                                        dr["Page No"] = DetailPageNo;
+                                        dr["Line No"] = DetailLineNo;
+                                        dr["Word No"] = word.WordNumber;
+                                        dr["Word"] = word.strWord;
+                                        dr["Left"] = word.Left;
+                                        dr["Top"] = word.Top;
+                                        dr["Right"] = word.Right;
+                                        dr["Bottom"] = word.Bottom;
+                                        dr["ObjWord"] = word;
+                                        dtDetailLineData.Rows.Add(dr);
+
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+
+                throw;
+            }
+            finally
+            {
+                GC.Collect();
+            }
+            return dtDetailLineData;
+        }
+
+        public RetStructF3 Line(clsCncMetaData ObjMetaData, int intCurrPageNumber, string Synonyms)
+        {
+            RetStructF3 objRetStructF3 = new RetStructF3();
+            objRetStructF3.Status = "F";
+            objRetStructF3.NoOfieldsSuspects = 0;
+
+            List<int> ConfLevel = new List<int>();
+
+            //int h = ObjMetaData.Page[intCurrPageNumber].ImageHeight;
+            //int w = ObjMetaData.Page[intCurrPageNumber].ImageWidth;
+            //int Wid = w;
+            //int Height = h / 2;
+            List<clsCnCWord> possibleword = new List<clsCnCWord>();
+            List<clsCnCWord> Finalpossibleword = new List<clsCnCWord>();
+            DataTable dtDetail = null;
+
+            try
+            {
+                string intLineNo = "0";
+
+                int RowIndex = 0;
+                string RIndex = Synonyms;
+                RowIndex = Convert.ToInt32(RIndex);
+
+                //Synonyms = "Quantity~Weight~Cl~Description~Class~NMFC~Qty~Pieces~Units~Qty~CTNS~Pieces/Quantity~Package";
+                Synonyms = "Quantity~Weight~Cl~Item Description~Commodity Description~Class~NMFC~Qty~Pieces~Units~Qty~CTNS~Pieces/Quantity~Package~WT~Pkgs~Net Weight~Gross Weight~Pallet";
+                //for (intCurrPageNumber = 1; intCurrPageNumber < ObjMetaData.PageCount; intCurrPageNumber++)
+                //possibleword = F3_GetValue(ObjMetaData, intCurrPageNumber, Synonyms, 0, 0, Wid, h);
+                //intCurrPageNumber = 1;
+
+                LineNo = F3_GetValue(ObjMetaData, intCurrPageNumber, Synonyms);
+
+                if (LineNo != "0")
+                    dtDetail = F3_GetDetailValue(ObjMetaData, intCurrPageNumber, RIndex, LineNo);
+
+
+                if (RowIndex != 0)
+                {
+                    if (Convert.ToString(dtDetail.Rows[RowIndex - 1]["Line No"]) != string.Empty)
+                        intLineNo = Convert.ToString(dtDetail.Rows[RowIndex - 1]["Line No"]);
+                }
+
+                clsCnCLine line = new clsCnCLine();
+                if (!string.IsNullOrEmpty(intLineNo) && intLineNo != "0")
+                {
+                    ClsCNC Objcnc = new ClsCNC();
+                    clsCnCWord word = Objcnc.MergeWords(ObjMetaData.Page[intCurrPageNumber].Line[Convert.ToInt32(intLineNo)].Word);
+                    Finalpossibleword.Add(word);
+                }
+
+                List<int> conflevel = new List<int>();
+                conflevel.Clear();
+
+                //if (!(possibleword == null))
+                //{
+                //    for (int i = 0; i <= possibleword.Count - 1; i++)
+                //    {
+
+                //        if (CheckValidWord(possibleword[i].strWord.ToUpper().Trim().Replace("'", "`"), new string[] { "DESCRIPTION" }))
+                //        {
+                //            Finalpossibleword.Add(possibleword[i]);
+                //        }
+
+
+                //    }
+                //}
+
+                if (!(Finalpossibleword == null))
+                {
+
+                    if (Finalpossibleword.Count == 0)
+                    {
+                        conflevel.Clear();
+                        Finalpossibleword.Add(GetDefaultWord(1, " "));
+                        conflevel.Add(90);
+
+                        objRetStructF3.NoOfieldsSuspects = Finalpossibleword.Count;
+                        objRetStructF3.Words = Finalpossibleword;
+                        objRetStructF3.ConfidenceLevelofSuspect = conflevel;
+                        objRetStructF3.Status = "S";
+                        objRetStructF3.Flag = "Y";
+                        objRetStructF3.ManualConfirmation = "N";
+                        return objRetStructF3;
+
+                    }
+                    for (int i = 0; i <= Finalpossibleword.Count - 1; i++)
+                    {
+                        conflevel.Add(90);
+
+                    }
+                    objRetStructF3.NoOfieldsSuspects = Finalpossibleword.Count;
+                    objRetStructF3.Words = Finalpossibleword;
+                    objRetStructF3.ConfidenceLevelofSuspect = conflevel;
+                    objRetStructF3.Status = "S";
+                    objRetStructF3.Flag = "Y";
+                    objRetStructF3.ManualConfirmation = "N";
+
+
+                    if (Finalpossibleword.Count > 1)
+                        objRetStructF3.ManualConfirmation = "Y";
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                //Error.Log File
+            }
+
+            return objRetStructF3;
+        }
+
+        private string F3_GetValue(clsCncMetaData ObjMetaData, int intCurrPageNumber, string stringArgs)
+        {
+            ClsCNC oClsCnc = new ClsCNC();
+            List<clsCnCWord> PossibleWords1 = new List<clsCnCWord>();
+            int x1, y1, x2, y2 = 0;
+
+            string[] args = stringArgs.Split(new char[] { '~' });
+
+            x1 = Convert.ToInt32(args[0]);
+            y1 = Convert.ToInt32(args[1]);
+            x2 = Convert.ToInt32(args[2]);
+            y2 = Convert.ToInt32(args[3]);
+
+            List<clsCnCLine> Lines = oClsCnc.GetLinesFromROI(ObjMetaData.Page, intCurrPageNumber, x1, y1, x2, y2).ToList();
+
+
+            //List<clsCnCLine> Lines = ObjMetaData.Page[intCurrPageNumber].Line.ToList();
+
+            string Synonyms = "Quantity~Weight~WElGHT~Cl~Item Description~Commodity Description~Class~NMFC~Qty~Pieces~Units~Qty~CTNS~Pieces/Quantity~Package~WT~Pkgs~Net Weight~Gross Weight";
+
+            //PossibleWords1 = GetColumnHeaderLineStatus(Lines, Synonyms, intCurrPageNumber);
+            string LineNo = GetColumnHeaderLineStatus(Lines, Synonyms, intCurrPageNumber);
+            //returnZones.Words = PossibleWords1
+            //return PossibleWords1;
+            return LineNo;
+
+        }
+
+        private DataTable F3_GetDetailValue(clsCncMetaData ObjMetaData, int intCurrPageNumber, string Synonyms, string LineNo)
+        {
+
+            //string LineNo = F3_GetValue(ObjMetaData, intCurrPageNumber, Synonyms, 0, 0, Wid, h);
+            int IntLineNo = Convert.ToInt32(LineNo);
+            DataRow dr;
+            MakeDtDeatilLine();
+
+            char[] seperator = { '\\' };
+
+            string[] file = PublicComponents.PROPath.Split(seperator);
+
+
+            //string connStr = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" + path + ";Extended Properties=Excel 12.0;";
+
+            string[] arrFileName = file[file.Count() - 1].Replace(".PRO", "").Split('_');
+
+            string PROFilename;
+
+            if (arrFileName.Count() == 1)
+            {
+                PROFilename = arrFileName[0];
+            }
+            else
+                PROFilename = arrFileName[arrFileName.Count() - 1];
+
+            string code = string.Empty;
+
+
+            if (PublicComponents.htMyVariable.ContainsKey("BOLSET4_ShpCode"))
+            {
+                code = Convert.ToString(PublicComponents.htMyVariable["BOLSET4_ShpCode"]);
+
+            }
+            else
+            {
+                //MyConnection = new System.Data.OleDb.OleDbConnection(connStr);
+                //MyCommand = new System.Data.OleDb.OleDbDataAdapter("select * from [Sheet1$] where [FHPRO]=" + PROFilename + "", MyConnection);
+
+
+                //DtSet = new System.Data.DataSet();
+                //MyCommand.Fill(DtSet);
+                //MyConnection.Close();
+
+                //MyCommand.Dispose();
+                //MyConnection.Dispose();
+
+
+                //if (DtSet != null)
+                //{
+                //    if (DtSet.Tables.Count > 0)
+                //    {
+                //        if (DtSet.Tables[0].Rows.Count > 0)
+                //            code = Convert.ToString(DtSet.Tables[0].Rows[0][1]);
+                //        //else
+                //        //    return null;
+                //    }
+                //    //if (code.StartsWith("99"))
+                //    //    return null;
+                //}
+            }
+
+            //if (code.StartsWith("99") || string.IsNullOrEmpty(code))
+            //    return null;
+
+            string shipcode = string.Empty;
+            shipcode = code.PadLeft(7, '0');
+            //if (code.Trim().Length < 7)
+            //{
+            //    for (int k = 1; k <= 7 - code.Trim().Length; k++)
+            //        shipcode = "0" + shipcode;
+            //}
+
+
+            //shipcode = "0107778";
+            //string Query_String = "SELECT F30.SASBLC, F31.SBDES,F31.SBNMFC,F31.SBSUB,F31.SBCMCL FROM FRP030 F30 Inner join FRP031 F31 on F30.SASBLC = F31.SBSBLC where F30.SASCD ='" + batchname[batchname.Count() - 1] + "'";
+            string Query_String = "SELECT F30.SASBLC, F31.SBDES,F31.SBNMFC,F31.SBSUB,F31.SBCMCL FROM FRP030 F30 Inner join FRP031 F31 on F30.SASBLC = F31.SBSBLC where F30.SASCD ='" + shipcode + "'";
+
+            string queryString = Query_String;
+
+            DataTable dtGetData = GetDataTableByText(As400_ConnectionString, queryString);
+
+            for (int i = IntLineNo + 1; i < ObjMetaData.Page[intCurrPageNumber].LineCount; i++)
+            {
+
+                if (ObjMetaData.Page[intCurrPageNumber].Line[i].strLine.ToUpper().Contains("TOTAL") || ObjMetaData.Page[intCurrPageNumber].Line[i].strLine.ToUpper().Contains("GRAND TOTAL"))
+                    break;
+
+                dr = dtDetailLine.NewRow();
+                //int NumeriCount = 0;
+                //int result;
+                //double dResult;
+                foreach (clsCnCWord word in ObjMetaData.Page[intCurrPageNumber].Line[i].Word)
+                {
+                    if (word != null)
+                    {
+                        foreach (DataRow item in dtGetData.Rows)
+                        {
+                            if ((word.strWord.Contains(Convert.ToString(item["SBNMFC"]).Trim()) || Convert.ToString(item["SBCMCL"]).Trim() == word.strWord.Trim()) && Convert.ToString(item["SBNMFC"]).Trim() != "0")
+                            //if (Convert.ToString(item["SBNMFC"]).Trim() == word.strWord.Trim() || Convert.ToString(item["SBCMCL"]).Trim() == word.strWord.Trim())
+                            {
+                                dr["Page No"] = intCurrPageNumber;
+                                dr["Line No"] = i;
+                                //dr["NumericWordCount"] = NumeriCount;
+                                DataRow[] drline = dtDetailLine.Select("[Line No]=" + i);
+                                if (drline != null)
+                                {
+                                    if (drline.Count() == 0)
+                                    {
+                                        dtDetailLine.Rows.Add(dr);
+
+                                    }
+
+                                }
+                                else
+                                {
+                                    dtDetailLine.Rows.Add(dr);
+                                }
+                            }
+                        }
+                        //if (int.TryParse(word.strWord.Replace(",", "").Replace("-", ""), out  result) || double.TryParse(word.strWord.Replace(",", "").Replace("-", ""), out  dResult))
+                        //    NumeriCount = NumeriCount + 1;
+
+                    }
+                }
+            }
+
+            //if (dtDetailLine.Rows.Count == 0)
+            //{
+            int k = 0;
+            for (int i = IntLineNo + 1; i < ObjMetaData.Page[intCurrPageNumber].LineCount; i++)
+            {
+
+                if (ObjMetaData.Page[intCurrPageNumber].Line[i].strLine.ToUpper().Contains("SUB WEIGHT") || ObjMetaData.Page[intCurrPageNumber].Line[i].strLine.ToUpper().Contains("TOTAL") || ObjMetaData.Page[intCurrPageNumber].Line[i].strLine.ToUpper().Contains("GRAND TOTAL"))
+                    break;
+
+                if (k >= 5 || (k >= 1 && dtDetailLine.Rows.Count > 0))
+                    break;
+
+                dr = dtDetailLine.NewRow();
+                int NumeriCount = 0;
+                int result;
+                double dResult;
+
+                foreach (clsCnCWord word in ObjMetaData.Page[intCurrPageNumber].Line[i].Word)
+                {
+                    if (word != null)
+                    {
+                        if (int.TryParse(word.strWord.Replace(",", "").Replace("-", ""), out  result) || double.TryParse(word.strWord.Replace(",", "").Replace("-", ""), out  dResult))
+                            NumeriCount = NumeriCount + 1;
+
+                    }
+                }
+                if (NumeriCount >= 2)
+                {
+                    dr["Page No"] = intCurrPageNumber;
+                    dr["Line No"] = i;
+                    dr["NumericWordCount"] = NumeriCount;
+
+                    if (!(dtDetailLine.AsEnumerable().Any(t => t.Field<string>("Line No") == i.ToString())))
+                        dtDetailLine.Rows.Add(dr);
+                }
+                else
+                {
+                    k++;
+                }
+            }
+
+
+            return dtDetailLine;
+        }
+
+        private string GetColumnHeaderLineStatus(List<clsCnCLine> Lines, string Synonyms, int intCurrPageNumber)
+        {
+            string[] ArgArr = null;
+            List<clsCnCWord> Possiblewords = new List<clsCnCWord>();
+            DataTable dt = MakeDtForCustomF3();
+
+            try
+            {
+                if (Synonyms.Contains("~"))
+                {
+                    ArgArr = Synonyms.Split('~');
+                    //Lines.Reverse();
+
+                    for (int i = 0; i <= Lines.Count - 1; i++)
+                    {
+                        if (Lines[i] != null)
+                        {
+                            Possiblewords = new List<clsCnCWord>();
+
+                            for (int j = 0; j <= ArgArr.Length - 1; j++)
+                            {
+                                for (int k = 0; k <= Lines[i].WordCount; k++)
+                                {
+                                    //    if (Lines[i].WordCount <=3)
+                                    //        break;
+
+                                    if (Lines[i].Word[k] != null)
+                                    {
+                                        if (CheckValidWord(Lines[i].Word[k].strWord.ToUpper().Trim().Replace("'", "`"), new String[] { ArgArr[j] }) || Lines[i].Word[k].strWord.ToUpper().Trim().Contains(ArgArr[j].ToUpper()))
+                                        {
+                                            if (!Possiblewords.Contains(Lines[i].Word[k]))
+                                            {
+                                                DataRow dr = dt.NewRow();
+
+                                                Possiblewords.Add(Lines[i].Word[k]);
+                                                dr["Page No"] = Lines[i].Word[k].PageNo;
+                                                dr["Keyword"] = ArgArr[j];
+                                                dr["Line No"] = Lines[i].Word[k].LineNo;
+                                                dr["Word No"] = Lines[i].Word[k].WordNumber;
+                                                dr["WordText"] = Lines[i].Word[k].strWord;
+                                                dt.Rows.Add(dr);
+                                            }
+
+                                        }
+                                    }
+
+                                }
+                            }
+
+                            //if (Possiblewords.Count >= 2)t=>t.
+                            //break;
+                        }
+                    }
+                }
+                var group = dt.AsEnumerable().GroupBy(t => t.Field<string>("Line No")).Select(t => new { Lineno = t.Key, WordCount = t.Count() });
+                DataTable dtGroup = new DataTable();
+
+                dtGroup.Columns.Add("LineNo");
+                dtGroup.Columns.Add("Count");
+
+                if (group.Count() > 0)
+                {
+                    foreach (var item in group)
+                    {
+
+                        DataRow dr = dtGroup.NewRow();
+                        dr["LineNo"] = item.Lineno;
+                        dr["Count"] = item.WordCount;
+                        dtGroup.Rows.Add(dr);
+                    }
+                }
+
+                DataRow[] drmaxCount = dtGroup.Select("Count = MAX(Count) and MAX(Count)>=3");
+
+
+                if (drmaxCount.Count() > 0)
+                    return Convert.ToString(drmaxCount[0]["LineNo"]);
+                else
+                    return "0";
+
+                //if (Possiblewords != null)
+                //{
+                //    if (Possiblewords.Count >= 2)
+                //    {
+                //        return Possiblewords;
+                //    }
+                //    else
+                //        return null;
+
+                //}
+                //else
+                //    return null;
+
+
+
+            }
+            catch (Exception)
+            {
+
+                throw;
+            }
+
+        }
+
+        private bool CheckValidWord(string sWord, string[] arrcheckkeywords)
+        {
+            bool bFlag = false;
+            int lengthofword;
+            // Dim AllMatches As MatchCollection = Regex.Matches(sWord, "[a-zA-Z0-9]+", RegexOptions.IgnoreCase)
+            // For Each SingleMatch As Match In AllMatches
+            // If Array.IndexOf(arrAllWords, SingleMatch.Value.ToUpper()) >= 0 Then
+            // bFlag = True
+            // End If
+            // Next
+            iQPUBLIC.clsCNCSBR objRestruct056 = new iQPUBLIC.clsCNCSBR();
+            iQPUBLIC.RetStructIQSBR058 objRestruct058;
+
+            if (!string.IsNullOrEmpty(sWord))
+            {
+
+                // Dim arrcheckkeywords() As String = sAllValidWords.Split("#")
+                List<string> arrFinalkeyword = new List<string>();
+                lengthofword = sWord.Length;
+
+                if ((lengthofword <= 5))
+                {
+                    for (int iLoop = 0; iLoop <= arrcheckkeywords.Length - 1; iLoop++)
+                    {
+                        if ((arrcheckkeywords[iLoop].Length <= 5))
+                            arrFinalkeyword.Add(arrcheckkeywords[iLoop].ToString());
+                    }
+                }
+                else if ((lengthofword >= 6 & lengthofword <= 8))
+                {
+                    for (int iLoop = 0; iLoop <= arrcheckkeywords.Length - 1; iLoop++)
+                    {
+                        if ((arrcheckkeywords[iLoop].Length >= 4 & arrcheckkeywords[iLoop].Length <= 8))
+                            arrFinalkeyword.Add(arrcheckkeywords[iLoop].ToString());
+                    }
+                }
+                else if ((lengthofword >= 9 & lengthofword <= 11))
+                {
+                    for (int iLoop = 0; iLoop <= arrcheckkeywords.Length - 1; iLoop++)
+                    {
+                        if ((arrcheckkeywords[iLoop].Length >= 9 & arrcheckkeywords[iLoop].Length <= 11))
+                            arrFinalkeyword.Add(arrcheckkeywords[iLoop].ToString());
+                    }
+                }
+                else if ((lengthofword >= 12))
+                {
+                    for (int iLoop = 0; iLoop <= arrcheckkeywords.Length - 1; iLoop++)
+                    {
+                        if ((arrcheckkeywords[iLoop].Length >= 8))
+                            arrFinalkeyword.Add(arrcheckkeywords[iLoop].ToString());
+                    }
+                }
+
+                for (int iLoop = 0; iLoop <= arrFinalkeyword.Count - 1; iLoop++)
+                {
+                    objRestruct058 = objRestruct056.IQSBR058(sWord, arrFinalkeyword[iLoop], true, CompareOptions.EliminateBlankNPunctuation);
+                    if ((lengthofword <= 5))
+                    {
+                        if ((objRestruct058.CharChanged < 1))
+                            bFlag = true;
+                    }
+                    else if ((lengthofword >= 6 & lengthofword <= 8))
+                    {
+                        if ((objRestruct058.CharChanged < 2))
+                            bFlag = true;
+                    }
+                    else if ((lengthofword >= 9 & lengthofword <= 11))
+                    {
+                        if ((objRestruct058.CharChanged < 3))
+                            bFlag = true;
+                    }
+                    else if ((lengthofword >= 12))
+                    {
+                        if ((objRestruct058.CharChanged < 4))
+                            bFlag = true;
+                    }
+                }
+            }
+
+            return bFlag;
+        }
+
+        private clsCnCWord GetDefaultWord(int iCurpgno, string strval)
+        {
+            clsCnCWord oRetword = new clsCnCWord();
+            oRetword.X1Char = "5";
+            oRetword.Y1Char = "5";
+            oRetword.X2Char = "10";
+            oRetword.X1Char = "10";
+            oRetword.Confidence = 90;
+            oRetword.LineNo = 1;
+            oRetword.PageNo = iCurpgno;
+            oRetword.Left = 10;
+            oRetword.Right = 20;
+            oRetword.Top = 10;
+            oRetword.Bottom = 20;
+            oRetword.strWord = strval.ToString();
+            oRetword.ConfString = "9".PadLeft(strval.Length);
+
+            return oRetword;
+        }
+
+        private DataTable MakeDtForCustomF3()
+        {
+            dtKeyword = new DataTable();
+            dtKeyword.Columns.Add("Keyword");
+            dtKeyword.Columns.Add("Page No");
+            dtKeyword.Columns.Add("Line No");
+            dtKeyword.Columns.Add("Word No");
+            dtKeyword.Columns.Add("WordText");
+
+            return dtKeyword;
+        }
+
+        private DataTable MakeDtDeatilLine()
+        {
+            dtDetailLine = new DataTable();
+            dtDetailLine.Columns.Add("Page No");
+            dtDetailLine.Columns.Add("Line No");
+            dtDetailLine.Columns.Add("NumericWordCount");
+            return dtDetailLine;
+        }
+
+        private DataTable MakeDtDeatilLineData()
+        {
+            dtDetailLineData = new DataTable();
+            dtDetailLineData.Columns.Add("Page No");
+            dtDetailLineData.Columns.Add("Line No");
+            dtDetailLineData.Columns.Add("Word No");
+            dtDetailLineData.Columns.Add("Word");
+            dtDetailLineData.Columns.Add("Left");
+            dtDetailLineData.Columns.Add("Top");
+            dtDetailLineData.Columns.Add("Right");
+            dtDetailLineData.Columns.Add("Bottom");
+            dtDetailLineData.Columns.Add("ObjWord", typeof(clsCnCWord));
+            return dtDetailLineData;
+        }
+
+        private DataTable MakedtDetailFinal()
+        {
+            dtDetailLineData = new DataTable();
+            dtDetailLineData.Columns.Add("Line Number");
+            dtDetailLineData.Columns.Add("Quantity");
+            dtDetailLineData.Columns.Add("Class Code");
+            dtDetailLineData.Columns.Add("HazMat code");
+            dtDetailLineData.Columns.Add("Pallate Code");
+            dtDetailLineData.Columns.Add("Description");
+            dtDetailLineData.Columns.Add("NMFC");
+            dtDetailLineData.Columns.Add("Weight");
+            dtDetailLineData.Columns.Add("IsValid");
+            dtDetailLineData.Columns.Add("WQuantity", typeof(clsCnCWord));
+            dtDetailLineData.Columns.Add("WClass Code", typeof(clsCnCWord));
+            dtDetailLineData.Columns.Add("WHazMat code", typeof(clsCnCWord));
+            dtDetailLineData.Columns.Add("WPallate Code", typeof(clsCnCWord));
+            dtDetailLineData.Columns.Add("WDescription", typeof(clsCnCWord));
+            dtDetailLineData.Columns.Add("WNMFC", typeof(clsCnCWord));
+            dtDetailLineData.Columns.Add("WWeight", typeof(clsCnCWord));
+
+            return dtDetailLineData;
+        }
+
+        #endregion
+
+        //protected virtual void Dispose(bool disposing)
+        //{
+        //    if (disposing)
+        //    {
+        //        // Free your true resources here (usually IDisposable fields)  These are all the global variables declared in the class. Exclude “string” and “int” variables as these are managed by Framework Garbage Collector.
+        //        // objBOLSET1IQF3.Dispose();  // This needs to be invoked before assigning NULL, once Dispose is added in BOL SET DLL code
+        //        objBOLSET1IQF3 = null;
+        //        // objBOLSET21IQF3.Dispose();  // This needs to be invoked before assigning NULL, once Dispose is added in BOL SET DLL code
+        //        objBOLSET2IQF3 = null;
+        //        // objBOLSET3IQF3.Dispose();  // This needs to be invoked before assigning NULL, once Dispose is added in BOL SET DLL code
+        //        objBOLSET3IQF3 = null;
+        //        // objBOLSET4IQF3.Dispose();  // This needs to be invoked before assigning NULL, once Dispose is added in BOL SET DLL code
+        //        objBOLSET4IQF3 = null;
+        //    }
+        //}
+
+
+
+        //public void Dispose()
+        //{
+
+        //    Dispose(true);
+        //    GC.SuppressFinalize(this);
+        //}
+    }
+}

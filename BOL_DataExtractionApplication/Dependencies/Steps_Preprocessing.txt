@@ -1,0 +1,6 @@
+1.	Unzip Dll.zip
+2.	Register scanfix.ocx file using regsvr32
+3.	unzip Windowapplicaion.zip
+4.	open project
+5.	Use Enhance.ini file  in load setting instruction in code..
+6.	Use testIamge.tiff and check output file

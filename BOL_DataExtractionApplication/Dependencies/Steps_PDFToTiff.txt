@@ -1,0 +1,1 @@
+PDFToTiff - Register IQImagineLibarry using regsvr32.exe
